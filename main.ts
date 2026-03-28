@@ -12,8 +12,10 @@ import { defaultGoal } from "./src/shared/seed.js";
 import { blenderBridgeConfigured } from "./src/server/blender-bridge.js";
 import {
   applySceneToBlender,
+  chatWithScene,
   renderSceneGraph,
   repairSceneRun,
+  runCheckpointLoop,
   startSceneResearch,
   validateSceneGraph,
 } from "./src/server/radar-engine.js";
@@ -80,6 +82,10 @@ export async function startStreamableHTTPServer(createServerFactory: () => McpSe
     res.json(validateSceneGraph({ sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "" }));
   });
 
+  app.post("/api/scene/:sceneId/loop", (req: Request, res: Response) => {
+    res.json(runCheckpointLoop({ sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "" }));
+  });
+
   app.post("/api/scene/:sceneId/blender", (req: Request, res: Response) => {
     const body = jsonBody<{ replayFailedOnly?: boolean }>(req);
     res.json(
@@ -98,6 +104,16 @@ export async function startStreamableHTTPServer(createServerFactory: () => McpSe
         instruction: body.instruction,
         targetNodeIds: body.targetNodeIds,
         preferStealth: body.preferStealth,
+      }),
+    );
+  });
+
+  app.post("/api/scene/:sceneId/chat", async (req: Request, res: Response) => {
+    const body = jsonBody<{ message?: string }>(req);
+    res.json(
+      await chatWithScene({
+        sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "",
+        message: body.message ?? "",
       }),
     );
   });

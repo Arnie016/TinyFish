@@ -150,6 +150,12 @@
   padding: 12px 16px;
 }
 
+.ui-button-quiet {
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .ui-button:hover,
 .source-chip:hover,
 .citation-row:hover {
@@ -569,6 +575,53 @@
   margin: 8px 0 12px;
   font-size: 1rem;
   letter-spacing: -0.02em;
+}
+
+.chat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-bubble {
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-bubble strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-bubble span {
+  display: block;
+  color: var(--ink);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.chat-assistant {
+  border-color: rgba(103, 164, 255, 0.22);
+}
+
+.chat-user {
+  border-color: rgba(255, 122, 54, 0.24);
+  background: rgba(255, 122, 54, 0.06);
+}
+
+.quick-chat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.chat-area {
+  min-height: 88px;
 }
 
 @media (max-width: 1200px) {

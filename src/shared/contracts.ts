@@ -19,6 +19,12 @@ export const scenePhaseSchema = z.enum([
 ]);
 export type ScenePhase = z.infer<typeof scenePhaseSchema>;
 
+export const sceneChatRoleSchema = z.enum(["user", "assistant"]);
+export type SceneChatRole = z.infer<typeof sceneChatRoleSchema>;
+
+export const checkpointLoopStatusSchema = z.enum(["idle", "running", "completed", "error"]);
+export type CheckpointLoopStatus = z.infer<typeof checkpointLoopStatusSchema>;
+
 export const sceneNodeTypeSchema = z.enum([
   "research_source",
   "scene_grounding",
@@ -234,6 +240,26 @@ export const sceneWorkflowSkillSchema = z.object({
 });
 export type SceneWorkflowSkill = z.infer<typeof sceneWorkflowSkillSchema>;
 
+export const sceneChatMessageSchema = z.object({
+  id: z.string(),
+  role: sceneChatRoleSchema,
+  text: z.string(),
+  timestamp: z.string(),
+});
+export type SceneChatMessage = z.infer<typeof sceneChatMessageSchema>;
+
+export const checkpointLoopStateSchema = z.object({
+  enabled: z.boolean(),
+  auto_apply: z.boolean(),
+  status: checkpointLoopStatusSchema,
+  repair_attempts: z.number().int().nonnegative(),
+  max_repairs: z.number().int().positive(),
+  replay_attempts: z.number().int().nonnegative(),
+  max_replays: z.number().int().positive(),
+  last_outcome: z.string(),
+});
+export type CheckpointLoopState = z.infer<typeof checkpointLoopStateSchema>;
+
 export const tinyFishEventSchema = z.object({
   id: z.string(),
   type: tinyFishEventTypeSchema,
@@ -303,6 +329,9 @@ export const sceneSessionSchema = z.object({
   grounding: sceneGroundingSchema.nullable(),
   scene_spec: sceneSpecSchema.nullable(),
   workflow_skills: z.array(sceneWorkflowSkillSchema),
+  chat_messages: z.array(sceneChatMessageSchema),
+  chat_placeholder: z.string(),
+  checkpoint_loop: checkpointLoopStateSchema,
   validation: z.object({
     status: validationStatusSchema,
     summary: z.string(),

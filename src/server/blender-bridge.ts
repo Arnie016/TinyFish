@@ -203,17 +203,17 @@ function buildGroundingSummary(payload: {
   frame_end: number;
   active_object: string | null;
   selected_objects: string[];
+  object_count: number;
   object_names: string[];
   collection_names: string[];
   camera_names: string[];
   light_names: string[];
   viewport_image?: string | null;
 }): SceneGrounding {
-  const objectCount = payload.object_names.length;
   const summaryLines = [
     `Scene "${payload.scene_name}" at frame ${payload.current_frame}/${payload.frame_end}.`,
     payload.active_object ? `Active object: ${payload.active_object}.` : "No active object.",
-    `Objects: ${objectCount}, cameras: ${payload.camera_names.length}, lights: ${payload.light_names.length}.`,
+    `Objects: ${payload.object_count}, cameras: ${payload.camera_names.length}, lights: ${payload.light_names.length}.`,
   ];
 
   if (payload.selected_objects.length) {
@@ -227,7 +227,7 @@ function buildGroundingSummary(payload: {
     frame_end: payload.frame_end,
     active_object: payload.active_object,
     selected_objects: payload.selected_objects,
-    object_count: objectCount,
+    object_count: payload.object_count,
     collection_names: payload.collection_names,
     camera_names: payload.camera_names,
     light_names: payload.light_names,

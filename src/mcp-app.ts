@@ -21,6 +21,7 @@ let currentPayload: ScenePayload | null = null;
 let statusLine = "Connecting to Codex host...";
 let goalDraft = defaultGoal;
 let clusterDraft = "";
+let chatDraft = "";
 let selectedNodeIds = new Set<string>();
 let pollHandle: number | null = null;
 let draggedSourceId: string | null = null;
@@ -66,7 +67,7 @@ function setPayload(payload: ScenePayload, message?: string) {
 
 function needsPolling(payload: ScenePayload | null): boolean {
   if (!payload) return false;
-  return ["researching", "normalizing", "repairing", "applying"].includes(payload.phase);
+  return ["researching", "normalizing", "repairing", "applying"].includes(payload.phase) || payload.checkpoint_loop.status === "running";
 }
 
 function stopPolling() {
@@ -128,6 +129,13 @@ async function callPreviewTool(name: string, args: Record<string, unknown>): Pro
       body: JSON.stringify({}),
     });
   }
+  if (name === "run_checkpoint_loop") {
+    return fetchJson<ScenePayload>(`/api/scene/${encodeURIComponent(String(args.sceneId))}/loop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  }
   if (name === "apply_scene_to_blender") {
     return fetchJson<ScenePayload>(`/api/scene/${encodeURIComponent(String(args.sceneId))}/blender`, {
       method: "POST",
@@ -144,6 +152,13 @@ async function callPreviewTool(name: string, args: Record<string, unknown>): Pro
         targetNodeIds: args.targetNodeIds,
         preferStealth: args.preferStealth,
       }),
+    });
+  }
+  if (name === "chat_with_scene") {
+    return fetchJson<ScenePayload>(`/api/scene/${encodeURIComponent(String(args.sceneId))}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: args.message }),
     });
   }
 
@@ -322,6 +337,64 @@ function sourceDockMarkup(payload: ScenePayload): string {
     .join("");
 }
 
+function loopMarkup(payload: ScenePayload): string {
+  return `
+    <section class="inspector-section">
+      <div class="inspector-kicker">Checkpoint loop</div>
+      <h3 class="subhead">${escapeHtml(payload.checkpoint_loop.status)}</h3>
+      <div class="detail-stack">
+        <div class="detail-line">Repairs: ${payload.checkpoint_loop.repair_attempts}/${payload.checkpoint_loop.max_repairs}</div>
+        <div class="detail-line">Replays: ${payload.checkpoint_loop.replay_attempts}/${payload.checkpoint_loop.max_replays}</div>
+        <div class="detail-line">${escapeHtml(payload.checkpoint_loop.last_outcome)}</div>
+      </div>
+      <div class="button-row">
+        <button class="ui-button" data-action="run-loop" ${payload.scene_spec ? "" : "disabled"}>Run loop</button>
+      </div>
+    </section>
+  `;
+}
+
+function chatMarkup(payload: ScenePayload): string {
+  const quickPrompts = [
+    "What do you see in the current Blender scene?",
+    "Which workflow skill should I run next?",
+    "Do we have any blocking validation issues?",
+  ];
+
+  return `
+    <section class="inspector-section">
+      <div class="inspector-kicker">Operator chat</div>
+      <div class="chat-list">
+        ${payload.chat_messages
+          .slice(-8)
+          .map(
+            (message) => `
+              <div class="chat-bubble chat-${escapeHtml(message.role)}">
+                <strong>${escapeHtml(message.role === "assistant" ? "Codex" : "You")}</strong>
+                <span>${escapeHtml(message.text)}</span>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="quick-chat-row">
+        ${quickPrompts
+          .map(
+            (prompt) => `
+              <button class="ui-button ui-button-quiet" data-action="seed-chat" data-chat-seed="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>
+            `,
+          )
+          .join("")}
+      </div>
+      <label class="field-label" for="chat-input">Ask Codex</label>
+      <textarea id="chat-input" class="field-area chat-area" placeholder="${escapeHtml(payload.chat_placeholder)}">${escapeHtml(chatDraft)}</textarea>
+      <div class="button-row">
+        <button class="ui-button ui-button-primary" data-action="send-chat" ${payload.scene_id ? "" : "disabled"}>Send</button>
+      </div>
+    </section>
+  `;
+}
+
 function inspectorMarkup(payload: ScenePayload): string {
   const nodes = selectedNodes(payload);
 
@@ -343,6 +416,8 @@ function inspectorMarkup(payload: ScenePayload): string {
           <button class="ui-button" data-action="clear-selection">Clear selection</button>
         </div>
       </section>
+      ${loopMarkup(payload)}
+      ${chatMarkup(payload)}
     `;
   }
 
@@ -402,6 +477,8 @@ function inspectorMarkup(payload: ScenePayload): string {
           <button class="ui-button" data-action="clear-selection">Back to operator view</button>
         </div>
       </section>
+      ${loopMarkup(payload)}
+      ${chatMarkup(payload)}
     `;
   }
 
@@ -467,6 +544,7 @@ function inspectorMarkup(payload: ScenePayload): string {
         }
       </div>
     </section>
+    ${loopMarkup(payload)}
     ${
       payload.workflow_skills.length
         ? `
@@ -488,6 +566,7 @@ function inspectorMarkup(payload: ScenePayload): string {
         `
         : ""
     }
+    ${chatMarkup(payload)}
     ${
       payload.scene_spec
         ? `
@@ -509,6 +588,7 @@ function inspectorMarkup(payload: ScenePayload): string {
 function actionRailMarkup(payload: ScenePayload): string {
   return `
     <div class="action-rail">
+      <button class="ui-button" data-action="run-loop" ${payload.scene_spec ? "" : "disabled"}>Run loop</button>
       <button class="ui-button" data-action="validate-scene" ${payload.scene_spec ? "" : "disabled"}>Validate</button>
       <button class="ui-button ui-button-primary" data-action="apply-blender" ${payload.scene_spec ? "" : "disabled"}>Apply to Blender</button>
       <button class="ui-button" data-action="replay-failed" ${payload.scene_spec ? "" : "disabled"}>Replay failed</button>
@@ -631,6 +711,18 @@ function render() {
         events: [],
       },
       scene_spec: null,
+      chat_messages: [],
+      chat_placeholder: "Ask about the current scene...",
+      checkpoint_loop: {
+        enabled: true,
+        auto_apply: true,
+        status: "idle",
+        repair_attempts: 0,
+        max_repairs: 2,
+        replay_attempts: 0,
+        max_replays: 2,
+        last_outcome: "Waiting for the preview payload.",
+      },
       validation: { status: "pending", summary: "", issues: [] },
       blender: {
         bridge_mode: "fallback",
@@ -670,6 +762,12 @@ async function runValidation() {
   setPayload(payload, payload.validation.summary);
 }
 
+async function runLoop() {
+  if (!currentPayload) return;
+  const payload = await callSceneTool("run_checkpoint_loop", { sceneId: currentPayload.scene_id });
+  setPayload(payload, payload.checkpoint_loop.last_outcome);
+}
+
 async function applyToBlender(replayFailedOnly = false) {
   if (!currentPayload) return;
   const payload = await callSceneTool("apply_scene_to_blender", {
@@ -688,6 +786,18 @@ async function repairScene() {
     preferStealth: false,
   });
   setPayload(payload, "Repair pass started.");
+}
+
+async function sendChat(message?: string) {
+  if (!currentPayload) return;
+  const nextMessage = (message ?? chatDraft).trim();
+  if (!nextMessage) return;
+  const payload = await callSceneTool("chat_with_scene", {
+    sceneId: currentPayload.scene_id,
+    message: nextMessage,
+  });
+  chatDraft = "";
+  setPayload(payload, "Scene chat updated.");
 }
 
 function exportSceneSpec() {
@@ -739,6 +849,9 @@ root.addEventListener("input", (event) => {
   if (target instanceof HTMLTextAreaElement && target.id === "cluster-input") {
     clusterDraft = target.value;
   }
+  if (target instanceof HTMLTextAreaElement && target.id === "chat-input") {
+    chatDraft = target.value;
+  }
 });
 
 root.addEventListener("dragstart", (event) => {
@@ -785,11 +898,17 @@ root.addEventListener("click", async (event) => {
   try {
     if (action === "launch-research") await launchResearch();
     if (action === "render-latest") await loadInitialState();
+    if (action === "run-loop") await runLoop();
     if (action === "validate-scene") await runValidation();
     if (action === "apply-blender") await applyToBlender(false);
     if (action === "replay-failed") await applyToBlender(true);
     if (action === "repair-scene") await repairScene();
     if (action === "cluster-merge") await repairScene();
+    if (action === "send-chat") await sendChat();
+    if (action === "seed-chat" && actionEl.dataset.chatSeed) {
+      chatDraft = actionEl.dataset.chatSeed;
+      render();
+    }
     if (action === "export-scene") exportSceneSpec();
     if (action === "clear-selection") {
       selectedNodeIds.clear();

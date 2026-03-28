@@ -5,6 +5,7 @@ import {
   type BrowserMode,
   type CheckpointKind,
   checkpointKindSchema,
+  type SceneChatMessage,
   type SceneEvidence,
   type SceneGraphEdge,
   type SceneGrounding,
@@ -56,6 +57,15 @@ type RepairSceneRunInput = {
   preferStealth?: boolean;
 };
 
+type ChatWithSceneInput = {
+  sceneId: string;
+  message: string;
+};
+
+type RunCheckpointLoopInput = {
+  sceneId: string;
+};
+
 const sessions = new Map<string, SceneSession>();
 const jobs = new Map<string, Promise<void>>();
 let latestSceneId: string | null = null;
@@ -66,6 +76,10 @@ function clone<T>(value: T): T {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function slugify(value: string): string {
@@ -494,6 +508,108 @@ function createBaseBlenderState(sceneId: string): BlenderRunState {
   return state;
 }
 
+function createChatMessage(role: SceneChatMessage["role"], text: string, sceneId: string): SceneChatMessage {
+  return {
+    id: `${sceneId}-chat-${role}-${randomUUID().slice(0, 8)}`,
+    role,
+    text,
+    timestamp: nowIso(),
+  };
+}
+
+function pushChatMessage(session: SceneSession, role: SceneChatMessage["role"], text: string) {
+  session.chat_messages = [...session.chat_messages, createChatMessage(role, text, session.scene_id)].slice(-14);
+}
+
+function defaultAssistantGreeting(): string {
+  return "Ask me what I see in the current Blender scene, which workflow skill to run next, or whether the checkpoint loop is stuck. I’ll answer from the live scene grounding and the current graph state.";
+}
+
+function uniqueNodeIds(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function autoRepairInstruction(session: SceneSession): string {
+  const blockingIssues = session.validation.issues.filter((issue) => issue.blocking);
+  const issueSummary = blockingIssues.map((issue) => issue.message).join(" ");
+  return [
+    "Repair the current scene graph conservatively.",
+    issueSummary || "Resolve any remaining blocking issues.",
+    "Attach at least one citation to every hero object, dedupe repeated props, and convert vague or uncertain items into note placeholders instead of final assets.",
+    "Keep the result safe for live Blender replay.",
+  ].join(" ");
+}
+
+function answerSceneChat(session: SceneSession, message: string): string {
+  const lower = message.toLowerCase();
+  const grounding = session.grounding;
+  const workflowNames = session.workflow_skills.map((skill) => skill.name);
+  const blockingIssues = session.validation.issues.filter((issue) => issue.blocking);
+  const failedActions = session.blender.command_plan.actions.filter((action) => action.status === "failed");
+
+  if (/(what|which).*(see|scene)|current blender|what's in blender|what is in blender/.test(lower)) {
+    if (!grounding) {
+      return "I don’t have fresh Blender grounding yet. Run research or ask me to refresh the scene, and I’ll pull the current viewport and scene facts before answering.";
+    }
+
+    const objectPreview =
+      grounding.object_names.length > 6
+        ? `${grounding.object_names.slice(0, 6).join(", ")}, and ${grounding.object_names.length - 6} more visible preview objects`
+        : grounding.object_names.join(", ") || "no named preview objects";
+
+    return `I can read the current Blender scene from Codex. Right now I’m grounded on "${grounding.scene_name}" at frame ${grounding.current_frame}/${grounding.frame_end}. I see ${grounding.object_count} total scene objects, with preview objects including ${objectPreview}. ${grounding.active_object ? `The active object is ${grounding.active_object}.` : "There is no active object selected right now."}`;
+  }
+
+  if (/workflow|skill|prompt|which.*run next|what.*run next/.test(lower)) {
+    if (!workflowNames.length) {
+      return "The scene-derived workflow skills haven’t been generated yet. Launch research first, then I’ll suggest the best one for the current scene.";
+    }
+
+    const recommendation = session.workflow_skills[0];
+    return `The current workflow skills are ${workflowNames.join(", ")}. I’d run "${recommendation.name}" first because ${recommendation.when_to_use.toLowerCase()}`;
+  }
+
+  if (/checkpoint|loop|retry|repair/.test(lower)) {
+    return `The checkpoint loop is ${session.checkpoint_loop.status}. Repair attempts: ${session.checkpoint_loop.repair_attempts}/${session.checkpoint_loop.max_repairs}. Replay attempts: ${session.checkpoint_loop.replay_attempts}/${session.checkpoint_loop.max_replays}. ${session.checkpoint_loop.last_outcome}`;
+  }
+
+  if (/validation|issue|problem|blocked/.test(lower)) {
+    if (!session.scene_spec) {
+      return "There isn’t a scene spec yet, so validation hasn’t started. Launch research first and I’ll validate the result automatically.";
+    }
+    if (!session.validation.issues.length) {
+      return "Validation is currently clear. The scene spec passed, and any remaining uncertainty is being held in notes and placeholders.";
+    }
+    return `Validation is ${session.validation.status}. The main issues are: ${session.validation.issues
+      .slice(0, 3)
+      .map((issue) => issue.message)
+      .join(" ")}`;
+  }
+
+  if (/apply|blender|replay|failed action/.test(lower)) {
+    if (!session.scene_spec) {
+      return "I don’t have a scene spec to apply yet. Let me ground the scene and run research first.";
+    }
+    if (!failedActions.length) {
+      return `Blender is in ${session.blender.bridge_mode} mode. ${session.blender.summary}`;
+    }
+    return `Some Blender actions still need attention: ${failedActions.map((action) => action.label).join(", ")}. I can replay the failed actions or run the checkpoint loop again.`;
+  }
+
+  if (/next|recommend|should i/.test(lower)) {
+    return session.narrative.next_best_move;
+  }
+
+  const sceneTitle = session.scene_spec?.project_title ?? session.goal;
+  const sceneStatus = session.scene_spec
+    ? `The current scene plan is "${sceneTitle}" with ${session.scene_spec.objects.length} structured objects and ${workflowNames.length} generated workflow skills.`
+    : "The scene plan is not fully generated yet.";
+  const issuesText = blockingIssues.length
+    ? `There are ${blockingIssues.length} blocking validation issues, so repair should happen before a confident Blender apply.`
+    : "There are no blocking validation issues right now.";
+  return `${sceneStatus} ${issuesText} ${session.narrative.next_best_move}`;
+}
+
 function createEmptySession(goal = defaultGoal): SceneSession {
   const sceneId = `scene-${slugify(goal) || "bootstrap"}-${randomUUID().slice(0, 8)}`;
   const sources = rankSources(goal);
@@ -539,13 +655,25 @@ function createEmptySession(goal = defaultGoal): SceneSession {
     grounding: null,
     scene_spec: null,
     workflow_skills: [],
+    chat_messages: [createChatMessage("assistant", defaultAssistantGreeting(), sceneId)],
+    chat_placeholder: "Ask about the current Blender scene, workflow skills, or next move...",
+    checkpoint_loop: {
+      enabled: true,
+      auto_apply: true,
+      status: "idle",
+      repair_attempts: 0,
+      max_repairs: 2,
+      replay_attempts: 0,
+      max_replays: 2,
+      last_outcome: "Checkpoint loop is ready. It will validate, repair if needed, and replay Blender actions automatically.",
+    },
     validation: {
       status: "pending",
       summary: "No validation run yet.",
       issues: [],
     },
     blender: createBaseBlenderState(sceneId),
-    quick_actions: ["Research", "Validate", "Apply to Blender", "Replay failed", "Export scene_spec.json"],
+    quick_actions: ["Research", "Run loop", "Validate", "Apply to Blender", "Replay failed", "Export scene_spec.json"],
     cluster_placeholder: "Merge the selected nodes into a stronger cinematic instruction...",
     export_filename: `${sceneId}.scene_spec.json`,
   };
@@ -912,6 +1040,9 @@ async function captureSceneGrounding(session: SceneSession) {
     }
 
     session.grounding = grounding;
+    if (session.scene_spec) {
+      refreshDerivedArtifacts(session);
+    }
     session.narrative.operator_brief = [
       `Grounded scene: ${grounding.scene_name}`,
       `Frame ${grounding.current_frame}/${grounding.frame_end}, ${grounding.object_count} objects`,
@@ -1161,7 +1292,13 @@ async function hydrateResearch(sceneId: string) {
     session.narrative.next_best_move = "Inspect the generated workflow skills, validate the scene, then apply or replay Blender actions.";
     saveSession(session);
 
-    validateSceneGraphInternal(sceneId);
+    if (session.checkpoint_loop.enabled) {
+      session.checkpoint_loop.repair_attempts = 0;
+      session.checkpoint_loop.replay_attempts = 0;
+      await runCheckpointLoopInternal(sceneId);
+    } else {
+      validateSceneGraphInternal(sceneId);
+    }
   } catch (error) {
     session.phase = "error";
     addTinyFishEvent(session, "error", "TinyFish error", String(error));
@@ -1201,6 +1338,187 @@ function validateSceneGraphInternal(sceneId: string) {
   saveSession(session);
 }
 
+async function performBlenderApply(session: SceneSession, replayFailedOnly = false) {
+  if (!session.scene_spec) {
+    return;
+  }
+
+  const actions = replayFailedOnly
+    ? session.blender.command_plan.actions.filter((action) => action.status === "failed")
+    : session.blender.command_plan.actions;
+
+  if (!actions.length) {
+    session.blender.summary = "No Blender actions needed replay right now.";
+    session.phase = "ready";
+    saveSession(session);
+    return;
+  }
+
+  session.phase = "applying";
+  session.blender.status = "applying";
+  session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
+    ...action,
+    status: actions.some((candidate) => candidate.id === action.id) ? "running" : action.status,
+  }));
+  saveSession(session);
+
+  await sleep(220);
+  const result = await applyBlenderPlan(session.scene_spec, actions);
+  session.blender.bridge_mode = result.bridgeMode;
+  session.blender.summary = result.summary;
+  session.blender.status = result.bridgeMode === "live" ? "applied" : "fallback_ready";
+  session.blender.last_applied_at = nowIso();
+  session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
+    ...action,
+    status: result.statuses.get(action.id) ?? action.status,
+  }));
+
+  addCheckpoint(
+    session,
+    "blender_applied",
+    session.blender.command_plan.actions.some((action) => action.status === "failed") ? "warning" : "ready",
+    session.blender.summary,
+  );
+  session.phase = result.bridgeMode === "live" ? "completed" : "ready";
+  session.subtitle =
+    result.bridgeMode === "live"
+      ? "Blender scene updated live from the Codex orchestration graph."
+      : "Live bridge unavailable, but the fallback command plan and export bundle are ready.";
+  session.narrative.next_best_move =
+    result.bridgeMode === "live"
+      ? "Inspect the updated scene in Blender, then use a workflow skill prompt to refine cameras, lighting, or props."
+      : "Keep the generated workflow skills, or use the export bundle while the live Blender bridge is unavailable.";
+  saveSession(session);
+}
+
+async function performRepairPass(session: SceneSession, input: RepairSceneRunInput) {
+  await sleep(260);
+  if (input.preferStealth) {
+    session.tinyfish.browser_profile = "stealth";
+    session.tinyfish.docs_reasoning = [
+      "Repair pass escalated from lite to stealth because the operator explicitly requested a safer browser profile.",
+      ...session.tinyfish.docs_reasoning,
+    ].slice(0, 4);
+  }
+  if (!session.scene_spec) {
+    session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+    refreshDerivedArtifacts(session);
+  }
+
+  if (input.instruction?.trim()) {
+    applyInstructionToScene(session, input.instruction.trim(), input.targetNodeIds ?? []);
+    addTinyFishEvent(
+      session,
+      "checkpoint",
+      "Repair note merged",
+      `Codex merged the cluster instruction into the scene graph: ${input.instruction.trim()}`,
+    );
+  } else {
+    session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+    refreshDerivedArtifacts(session);
+    addTinyFishEvent(
+      session,
+      "checkpoint",
+      "Repair rerun staged",
+      "Codex rebuilt the scene spec conservatively from the existing evidence.",
+    );
+  }
+
+  addCheckpoint(session, "scene_spec_normalized", "ready", "Repair pass normalized the scene graph with tighter instructions.");
+  session.phase = "ready";
+  session.subtitle = "Repair pass complete. Validate again or replay Blender from the updated graph.";
+  session.narrative.next_best_move = "Validate the repaired scene, then copy a workflow skill prompt or replay Blender actions.";
+  saveSession(session);
+  validateSceneGraphInternal(session.scene_id);
+}
+
+async function runCheckpointLoopInternal(sceneId: string) {
+  let session = sessions.get(sceneId);
+  if (!session || !session.scene_spec) {
+    return;
+  }
+
+  session.checkpoint_loop.status = "running";
+  session.checkpoint_loop.last_outcome = "Checkpoint loop is validating the current scene graph.";
+  saveSession(session);
+  validateSceneGraphInternal(sceneId);
+
+  session = sessions.get(sceneId);
+  if (!session || !session.scene_spec) {
+    return;
+  }
+
+  if (session.validation.status === "failed") {
+    const blockingNodeIds = uniqueNodeIds(
+      session.validation.issues.filter((issue) => issue.blocking).flatMap((issue) => issue.node_ids),
+    );
+
+    if (session.checkpoint_loop.repair_attempts >= session.checkpoint_loop.max_repairs) {
+      session.checkpoint_loop.status = "error";
+      session.checkpoint_loop.last_outcome = "Checkpoint loop exhausted its auto-repair budget. Manual repair is needed.";
+      session.narrative.next_best_move = "Use repair or chat with Codex about the blocking issues before applying to Blender again.";
+      saveSession(session);
+      return;
+    }
+
+    session.checkpoint_loop.repair_attempts += 1;
+    session.checkpoint_loop.last_outcome = `Auto-repair ${session.checkpoint_loop.repair_attempts}/${session.checkpoint_loop.max_repairs} is running.`;
+    session.phase = "repairing";
+    session.subtitle = "Checkpoint loop found blocking issues and is running an automatic repair pass.";
+    addCheckpoint(session, "repair_needed", "running", "Checkpoint loop triggered an automatic repair pass.");
+    saveSession(session);
+
+    await performRepairPass(session, {
+      sceneId,
+      instruction: autoRepairInstruction(session),
+      targetNodeIds: blockingNodeIds,
+      preferStealth: session.checkpoint_loop.repair_attempts > 1,
+    });
+    await runCheckpointLoopInternal(sceneId);
+    return;
+  }
+
+  if (!session.checkpoint_loop.auto_apply) {
+    session.checkpoint_loop.status = "completed";
+    session.checkpoint_loop.last_outcome = "Validation passed. Auto-apply is off, so the loop is waiting for a manual Blender apply.";
+    saveSession(session);
+    return;
+  }
+
+  await performBlenderApply(session, false);
+  session = sessions.get(sceneId);
+  if (!session) {
+    return;
+  }
+
+  const failedActions = session.blender.command_plan.actions.filter((action) => action.status === "failed");
+  if (session.blender.bridge_mode === "live" && failedActions.length) {
+    if (session.checkpoint_loop.replay_attempts >= session.checkpoint_loop.max_replays) {
+      session.checkpoint_loop.status = "error";
+      session.checkpoint_loop.last_outcome = "Checkpoint loop exhausted its replay budget. Some Blender actions still failed.";
+      saveSession(session);
+      return;
+    }
+
+    session.checkpoint_loop.replay_attempts += 1;
+    session.checkpoint_loop.last_outcome = `Replay ${session.checkpoint_loop.replay_attempts}/${session.checkpoint_loop.max_replays} is retrying failed Blender actions.`;
+    saveSession(session);
+    await performBlenderApply(session, true);
+    session = sessions.get(sceneId);
+  }
+
+  if (!session) {
+    return;
+  }
+
+  const remainingFailures = session.blender.command_plan.actions.filter((action) => action.status === "failed");
+  session.checkpoint_loop.status = remainingFailures.length ? "error" : "completed";
+  session.checkpoint_loop.last_outcome = remainingFailures.length
+    ? `Checkpoint loop finished with ${remainingFailures.length} failed Blender actions still requiring manual attention.`
+    : "Checkpoint loop completed successfully. The scene is validated and Blender is in sync.";
+  saveSession(session);
+}
+
 async function hydrateBlenderApply(sceneId: string, replayFailedOnly = false) {
   const session = sessions.get(sceneId);
   if (!session || !session.scene_spec) {
@@ -1209,53 +1527,7 @@ async function hydrateBlenderApply(sceneId: string, replayFailedOnly = false) {
   }
 
   try {
-    const actions = replayFailedOnly
-      ? session.blender.command_plan.actions.filter((action) => action.status === "failed")
-      : session.blender.command_plan.actions;
-
-    if (!actions.length) {
-      session.blender.summary = "No Blender actions needed replay right now.";
-      session.phase = "ready";
-      saveSession(session);
-      jobs.delete(sceneId);
-      return;
-    }
-
-    session.phase = "applying";
-    session.blender.status = "applying";
-    session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
-      ...action,
-      status: actions.some((candidate) => candidate.id === action.id) ? "running" : action.status,
-    }));
-    saveSession(session);
-
-    await sleep(220);
-    const result = await applyBlenderPlan(session.scene_spec, actions);
-    session.blender.bridge_mode = result.bridgeMode;
-    session.blender.summary = result.summary;
-    session.blender.status = result.bridgeMode === "live" ? "applied" : "fallback_ready";
-    session.blender.last_applied_at = new Date().toISOString();
-    session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
-      ...action,
-      status: result.statuses.get(action.id) ?? action.status,
-    }));
-
-    addCheckpoint(
-      session,
-      "blender_applied",
-      session.blender.command_plan.actions.some((action) => action.status === "failed") ? "warning" : "ready",
-      session.blender.summary,
-    );
-    session.phase = result.bridgeMode === "live" ? "completed" : "ready";
-    session.subtitle =
-      result.bridgeMode === "live"
-        ? "Blender scene updated live from the Codex orchestration graph."
-        : "Live bridge unavailable, but the fallback command plan and export bundle are ready.";
-    session.narrative.next_best_move =
-      result.bridgeMode === "live"
-        ? "Inspect the updated scene in Blender, then use a workflow skill prompt to refine cameras, lighting, or props."
-        : "Keep the generated workflow skills, or use the export bundle while the live Blender bridge is unavailable.";
-    saveSession(session);
+    await performBlenderApply(session, replayFailedOnly);
   } catch (error) {
     session.blender.status = "failed";
     session.blender.summary = String(error);
@@ -1280,48 +1552,36 @@ async function hydrateRepair(sceneId: string, input: RepairSceneRunInput) {
   }
 
   try {
-    await sleep(260);
-    if (input.preferStealth) {
-      session.tinyfish.browser_profile = "stealth";
-      session.tinyfish.docs_reasoning = [
-        "Repair pass escalated from lite to stealth because the operator explicitly requested a safer browser profile.",
-        ...session.tinyfish.docs_reasoning,
-      ].slice(0, 4);
-    }
-    if (!session.scene_spec) {
-      session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
-      refreshDerivedArtifacts(session);
-    }
-
-    if (input.instruction?.trim()) {
-      applyInstructionToScene(session, input.instruction.trim(), input.targetNodeIds ?? []);
-      addTinyFishEvent(
-        session,
-        "checkpoint",
-        "Repair note merged",
-        `Codex merged the cluster instruction into the scene graph: ${input.instruction.trim()}`,
-      );
-    } else {
-      session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
-      refreshDerivedArtifacts(session);
-      addTinyFishEvent(
-        session,
-        "checkpoint",
-        "Repair rerun staged",
-        "Codex rebuilt the scene spec conservatively from the existing evidence.",
-      );
-    }
-
-    addCheckpoint(session, "scene_spec_normalized", "ready", "Repair pass normalized the scene graph with tighter instructions.");
-    session.phase = "ready";
-    session.subtitle = "Repair pass complete. Validate again or replay Blender from the updated graph.";
-    session.narrative.next_best_move = "Validate the repaired scene, then copy a workflow skill prompt or replay Blender actions.";
-    saveSession(session);
-    validateSceneGraphInternal(sceneId);
+    await performRepairPass(session, input);
   } catch (error) {
     session.phase = "error";
     session.subtitle = "Repair failed. Tighten the instruction or restart research.";
     addTinyFishEvent(session, "error", "Repair failed", String(error));
+    saveSession(session);
+  } finally {
+    jobs.delete(sceneId);
+  }
+}
+
+async function hydrateCheckpointLoop(sceneId: string) {
+  const session = sessions.get(sceneId);
+  if (!session) {
+    jobs.delete(sceneId);
+    return;
+  }
+
+  try {
+    if (!session.scene_spec) {
+      session.phase = "normalizing";
+      session.subtitle = "Checkpoint loop is waiting for a scene spec before it can run.";
+      saveSession(session);
+      return;
+    }
+    await runCheckpointLoopInternal(sceneId);
+  } catch (error) {
+    session.checkpoint_loop.status = "error";
+    session.checkpoint_loop.last_outcome = `Checkpoint loop failed: ${String(error)}`;
+    session.phase = "error";
     saveSession(session);
   } finally {
     jobs.delete(sceneId);
@@ -1363,6 +1623,17 @@ export function validateSceneGraph(input: ValidateSceneGraphInput): SceneSession
   return clone(getSession(session.scene_id));
 }
 
+export function runCheckpointLoop(input: RunCheckpointLoopInput): SceneSession {
+  const session = getSession(input.sceneId);
+  session.checkpoint_loop.status = "running";
+  session.checkpoint_loop.last_outcome = "Checkpoint loop started manually from the operator surface.";
+  saveSession(session);
+
+  const job = hydrateCheckpointLoop(session.scene_id);
+  jobs.set(session.scene_id, job);
+  return clone(getSession(session.scene_id));
+}
+
 export function applySceneToBlender(input: ApplySceneToBlenderInput): SceneSession {
   const session = getSession(input.sceneId);
   const job = hydrateBlenderApply(session.scene_id, input.replayFailedOnly);
@@ -1379,5 +1650,19 @@ export function repairSceneRun(input: RepairSceneRunInput): SceneSession {
 
   const job = hydrateRepair(session.scene_id, input);
   jobs.set(session.scene_id, job);
+  return clone(getSession(session.scene_id));
+}
+
+export async function chatWithScene(input: ChatWithSceneInput): Promise<SceneSession> {
+  const session = getSession(input.sceneId);
+  const message = input.message.trim();
+  if (!message) {
+    return clone(session);
+  }
+
+  await captureSceneGrounding(session);
+  pushChatMessage(session, "user", message);
+  pushChatMessage(session, "assistant", answerSceneChat(session, message));
+  saveSession(session);
   return clone(getSession(session.scene_id));
 }

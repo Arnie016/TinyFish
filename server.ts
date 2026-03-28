@@ -7,8 +7,10 @@ import { z } from "zod";
 import { browserModeSchema, sceneGroundingSchema, sceneSessionSchema } from "./src/shared/contracts.js";
 import {
   applySceneToBlender,
+  chatWithScene,
   renderSceneGraph,
   repairSceneRun,
+  runCheckpointLoop,
   startSceneResearch,
   validateSceneGraph,
 } from "./src/server/radar-engine.js";
@@ -85,6 +87,23 @@ export function createServer(): McpServer {
 
   registerAppTool(
     server,
+    "run_checkpoint_loop",
+    {
+      title: "Run checkpoint loop",
+      description: "Use this when you want Codex to validate, auto-repair, and replay Blender actions through the checkpoint loop for the current scene.",
+      inputSchema: {
+        sceneId: z.string(),
+      },
+      outputSchema: sceneSessionSchema,
+      _meta: {
+        ui: { resourceUri },
+      },
+    },
+    async ({ sceneId }): Promise<CallToolResult> => withUi("Checkpoint loop started.", runCheckpointLoop({ sceneId })),
+  );
+
+  registerAppTool(
+    server,
     "validate_scene_graph",
     {
       title: "Validate scene graph",
@@ -141,6 +160,25 @@ export function createServer(): McpServer {
         "Repair pass started.",
         repairSceneRun({ sceneId, instruction, targetNodeIds, preferStealth }),
       ),
+  );
+
+  registerAppTool(
+    server,
+    "chat_with_scene",
+    {
+      title: "Chat with scene",
+      description: "Use this when you want Codex to answer questions about the current Blender scene, workflow skills, validation state, or next move from inside the orchestrator.",
+      inputSchema: {
+        sceneId: z.string(),
+        message: z.string().min(1),
+      },
+      outputSchema: sceneSessionSchema,
+      _meta: {
+        ui: { resourceUri },
+      },
+    },
+    async ({ sceneId, message }): Promise<CallToolResult> =>
+      withUi("Scene chat updated.", await chatWithScene({ sceneId, message })),
   );
 
   registerAppTool(
