@@ -1,15 +1,21 @@
 :root {
-  color-scheme: light;
-  --radar-bg: #f5f0e4;
-  --radar-panel: rgba(255, 252, 244, 0.66);
-  --radar-ink: #182436;
-  --radar-muted: #546173;
-  --radar-border: rgba(24, 36, 54, 0.12);
-  --radar-accent: #ff6b3b;
-  --radar-accent-soft: rgba(255, 107, 59, 0.14);
-  --radar-success: #1f8f6a;
-  --radar-grid: rgba(24, 36, 54, 0.08);
-  --radar-shadow: 0 30px 80px rgba(24, 36, 54, 0.08);
+  color-scheme: dark;
+  --bg: #070b12;
+  --panel: rgba(11, 18, 29, 0.88);
+  --panel-strong: rgba(14, 22, 35, 0.96);
+  --panel-soft: rgba(18, 29, 46, 0.56);
+  --ink: #edf3ff;
+  --muted: #90a3c1;
+  --border: rgba(156, 184, 222, 0.16);
+  --grid: rgba(119, 152, 201, 0.12);
+  --accent: #ff7a36;
+  --accent-soft: rgba(255, 122, 54, 0.14);
+  --aqua: #4ad1c8;
+  --blue: #67a4ff;
+  --warn: #ffc857;
+  --danger: #ff6e8f;
+  --success: #5be37a;
+  --shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
@@ -27,10 +33,11 @@ body {
   margin: 0;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(255, 107, 59, 0.18), transparent 28%),
-    radial-gradient(circle at 78% 12%, rgba(31, 143, 106, 0.14), transparent 24%),
-    linear-gradient(180deg, #f8f3e6 0%, #edf2ec 100%);
-  color: var(--radar-ink);
+    radial-gradient(circle at 18% 18%, rgba(103, 164, 255, 0.2), transparent 25%),
+    radial-gradient(circle at 82% 10%, rgba(255, 122, 54, 0.2), transparent 22%),
+    radial-gradient(circle at 70% 72%, rgba(74, 209, 200, 0.12), transparent 28%),
+    linear-gradient(180deg, #060910 0%, #09111d 48%, #05070d 100%);
+  color: var(--ink);
 }
 
 body::before {
@@ -38,15 +45,24 @@ body::before {
   position: fixed;
   inset: 0;
   background-image:
-    linear-gradient(var(--radar-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--radar-grid) 1px, transparent 1px);
-  background-size: 28px 28px;
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.92), transparent 92%);
   pointer-events: none;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 92%);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at center, transparent 0 48%, rgba(4, 8, 14, 0.7) 86%, rgba(4, 8, 14, 0.94) 100%);
+  pointer-events: none;
 }
 
 button,
-input {
+textarea {
   font: inherit;
 }
 

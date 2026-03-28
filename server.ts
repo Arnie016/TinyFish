@@ -4,13 +4,20 @@ import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/s
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { browserModeSchema, compilerDecisionSchema, patchJobSchema, skillRecordSchema, sourceCandidateSchema, sourceKindSchema, surfaceTypeSchema, usageStatsSchema, workflowSpecSchema } from "./src/shared/contracts.js";
-import { compileSkill, discoverSources, extractWorkflow, findSimilarSkills, listSkills, patchSkill, renderRegistryDashboard, renderRunResult, renderSkillCard, scanSources, skillUsageStats } from "./src/server/radar-engine.js";
+import { browserModeSchema, sceneGroundingSchema, sceneSessionSchema } from "./src/shared/contracts.js";
+import {
+  applySceneToBlender,
+  renderSceneGraph,
+  repairSceneRun,
+  startSceneResearch,
+  validateSceneGraph,
+} from "./src/server/radar-engine.js";
+import { executeBlenderCode, getViewportScreenshot, readBlenderSceneGrounding } from "./src/server/blender-bridge.js";
 
 const distDir = import.meta.filename.endsWith(".ts")
   ? path.join(import.meta.dirname, "dist")
   : import.meta.dirname;
-const resourceUri = "ui://radar/control-surface.html";
+const resourceUri = "ui://codex/scene-orchestrator.html";
 
 function narrate(summary: string): CallToolResult["content"] {
   return [{ type: "text", text: summary }];
@@ -20,362 +27,184 @@ async function readWidgetHtml(): Promise<string> {
   return fs.readFile(path.join(distDir, "mcp-app.html"), "utf-8");
 }
 
+function withUi<T extends Record<string, unknown>>(summary: string, payload: T): CallToolResult {
+  return {
+    content: narrate(summary),
+    structuredContent: payload,
+  };
+}
+
 export function createServer(): McpServer {
   const server = new McpServer({
-    name: "Radar MCP Server",
-    version: "0.1.0",
+    name: "Codex Scene Orchestrator",
+    version: "0.2.0",
   });
 
   registerAppTool(
     server,
-    "discover_sources",
+    "start_scene_research",
     {
-      title: "Discover sources",
-      description: "Use this when you need the best public source shortlist before extracting a workflow.",
-      _meta: {},
+      title: "Start scene research",
+      description: "Use this when you want Codex to launch a TinyFish-guided research pass and begin filling the live scene graph.",
       inputSchema: {
-        topic: z.string().min(3),
-        sourceKinds: z.array(sourceKindSchema).optional(),
-        preferLiveBrowser: z.boolean().optional(),
+        goal: z.string().min(12),
+        sourceUrl: z.url().optional(),
+        browserProfile: z.enum(["lite", "stealth"]).optional(),
       },
-      outputSchema: z.object({
-        sources: z.array(sourceCandidateSchema),
-        escalatedToTinyFish: z.boolean(),
-        rationale: z.string(),
-      }),
-    },
-    async ({ topic, sourceKinds, preferLiveBrowser }): Promise<CallToolResult> => {
-      const result = discoverSources({ topic, sourceKinds, preferLiveBrowser });
-      return {
-        content: narrate(`Discovered ${result.sources.length} public sources for "${topic}".`),
-        structuredContent: result,
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    "scan_sources",
-    {
-      title: "Scan sources",
-      description: "Use this when you need to decide whether each public page can stay on fetch or should escalate to TinyFish.",
-      _meta: {},
-      inputSchema: {
-        sourceUrls: z.array(z.url()).min(1),
-      },
-      outputSchema: z.object({
-        scans: z.array(
-          z.object({
-            url: z.url(),
-            source_kind: sourceKindSchema,
-            recommended_path: z.enum(["fetch", "tinyfish"]),
-            browser_mode: browserModeSchema,
-            blocked: z.boolean(),
-            note: z.string(),
-          }),
-        ),
-        blocked: z.boolean(),
-        next_step: z.string(),
-      }),
-    },
-    async ({ sourceUrls }): Promise<CallToolResult> => {
-      const result = scanSources(sourceUrls);
-      return {
-        content: narrate(result.next_step),
-        structuredContent: result,
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    "extract_workflow",
-    {
-      title: "Extract workflow",
-      description: "Use this when you want a normalized workflow spec from public evidence and a target surface.",
-      _meta: {},
-      inputSchema: {
-        title: z.string().min(3),
-        description: z.string().optional(),
-        sourceUrls: z.array(z.url()).min(1),
-        desiredSurface: surfaceTypeSchema.optional(),
-      },
-      outputSchema: workflowSpecSchema,
-    },
-    async ({ title, description, sourceUrls, desiredSurface }): Promise<CallToolResult> => {
-      const result = extractWorkflow({ title, description, sourceUrls, desiredSurface });
-      return {
-        content: narrate(`Extracted workflow "${result.title}" with ${result.steps.length} compiler steps.`),
-        structuredContent: result,
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    "find_similar_skills",
-    {
-      title: "Find similar skills",
-      description: "Use this when you want retrieval before generation and need the best reuse, fork, or compose candidates.",
-      _meta: {},
-      inputSchema: {
-        category: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        workflowTitle: z.string().optional(),
-      },
-      outputSchema: z.object({
-        nearest_skills: z.array(
-          z.object({
-            skill_id: z.string(),
-            score: z.number(),
-          }),
-        ),
-        recommended_decision: z.enum(["reuse", "fork", "compose", "create"]),
-      }),
-    },
-    async ({ category, tags, workflowTitle }): Promise<CallToolResult> => {
-      const result = findSimilarSkills({ category, tags, workflowTitle });
-      return {
-        content: narrate(`Top match: ${result.nearest_skills[0]?.skill_id ?? "none yet"}.`),
-        structuredContent: result,
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    "compile_skill",
-    {
-      title: "Compile skill",
-      description: "Use this when you already have a workflow spec and want Radar to pick the best compile strategy and surface it.",
-      inputSchema: {
-        workflowSpec: workflowSpecSchema,
-        preferredStrategy: z.enum(["reuse", "fork", "compose", "create"]).optional(),
-      },
-      outputSchema: z.object({
-        view: z.literal("run"),
-        title: z.string(),
-        subtitle: z.string(),
-        outcome: z.object({
-          verdict: z.string(),
-          rationale: z.array(z.string()),
-          next_step: z.string(),
-        }),
-        citations: z.array(z.object({ label: z.string(), url: z.url() })),
-        decision: compilerDecisionSchema,
-        skill: skillRecordSchema,
-        generated_files: z.array(z.string()),
-      }),
+      outputSchema: sceneSessionSchema,
       _meta: {
         ui: { resourceUri },
       },
     },
-    async ({ workflowSpec, preferredStrategy }): Promise<CallToolResult> => {
-      const result = compileSkill({ workflowSpec, preferredStrategy });
-      return {
-        content: narrate(result.outcome.verdict),
-        structuredContent: result,
-      };
+    async ({ goal, sourceUrl, browserProfile }): Promise<CallToolResult> => {
+      const result = startSceneResearch({
+        goal,
+        sourceUrl,
+        browserProfile: browserModeSchema.parse(browserProfile ?? "lite") as "lite" | "stealth",
+      });
+      return withUi("Scene research started.", result);
     },
   );
 
   registerAppTool(
     server,
-    "patch_skill",
+    "render_scene_graph",
     {
-      title: "Patch skill",
-      description: "Use this when a watched source drifts and you want an eval-gated patch proposal instead of silent mutation.",
+      title: "Render scene graph",
+      description: "Use this when you want the widget to render the current Codex-native orchestration graph and inspector state.",
       inputSchema: {
-        skillId: z.string().min(2),
-        reason: z.string().min(5),
-        changedSources: z.array(z.url()).optional(),
+        sceneId: z.string().optional(),
       },
-      outputSchema: z.object({
-        view: z.literal("run"),
-        title: z.string(),
-        subtitle: z.string(),
-        outcome: z.object({
-          verdict: z.string(),
-          rationale: z.array(z.string()),
-          next_step: z.string(),
-        }),
-        citations: z.array(z.object({ label: z.string(), url: z.url() })),
-        patch: patchJobSchema,
-      }),
+      outputSchema: sceneSessionSchema,
       _meta: {
         ui: { resourceUri },
       },
     },
-    async ({ skillId, reason, changedSources }): Promise<CallToolResult> => {
-      const result = patchSkill({ skillId, reason, changedSources });
-      return {
-        content: narrate(result.outcome.verdict),
-        structuredContent: result,
-      };
-    },
+    async ({ sceneId }): Promise<CallToolResult> => withUi("Scene graph rendered.", renderSceneGraph(sceneId)),
   );
 
   registerAppTool(
     server,
-    "list_skills",
+    "validate_scene_graph",
     {
-      title: "List skills",
-      description: "Use this when you want the current Radar catalog filtered by category, tag, or status.",
-      _meta: {},
+      title: "Validate scene graph",
+      description: "Use this when you want Codex to verify citations, ambiguity, duplicates, and Blender readiness for the current scene graph.",
       inputSchema: {
-        category: z.string().optional(),
-        tag: z.string().optional(),
-        status: z.enum(["active", "draft", "paused"]).optional(),
+        sceneId: z.string(),
       },
-      outputSchema: z.object({
-        skills: z.array(skillRecordSchema),
-      }),
+      outputSchema: sceneSessionSchema,
+      _meta: {
+        ui: { resourceUri },
+      },
     },
-    async ({ category, tag, status }): Promise<CallToolResult> => {
-      const result = listSkills({ category, tag, status });
-      return {
-        content: narrate(`Listed ${result.skills.length} skills from the registry.`),
-        structuredContent: result,
-      };
-    },
+    async ({ sceneId }): Promise<CallToolResult> => withUi("Scene validation updated.", validateSceneGraph({ sceneId })),
   );
 
   registerAppTool(
     server,
-    "skill_usage_stats",
+    "apply_scene_to_blender",
     {
-      title: "Skill usage stats",
-      description: "Use this when you need the top-line metrics that make the skill bank feel alive.",
-      _meta: {},
+      title: "Apply scene to Blender",
+      description: "Use this when you want Codex to send the current command plan to Blender or prepare the fallback export path.",
+      inputSchema: {
+        sceneId: z.string(),
+        replayFailedOnly: z.boolean().optional(),
+      },
+      outputSchema: sceneSessionSchema,
+      _meta: {
+        ui: { resourceUri },
+      },
+    },
+    async ({ sceneId, replayFailedOnly }): Promise<CallToolResult> =>
+      withUi("Blender apply started.", applySceneToBlender({ sceneId, replayFailedOnly })),
+  );
+
+  registerAppTool(
+    server,
+    "repair_scene_run",
+    {
+      title: "Repair scene run",
+      description: "Use this when you want Codex to tighten the scene graph, re-normalize uncertainty, or replay a better TinyFish strategy.",
+      inputSchema: {
+        sceneId: z.string(),
+        instruction: z.string().optional(),
+        targetNodeIds: z.array(z.string()).optional(),
+        preferStealth: z.boolean().optional(),
+      },
+      outputSchema: sceneSessionSchema,
+      _meta: {
+        ui: { resourceUri },
+      },
+    },
+    async ({ sceneId, instruction, targetNodeIds, preferStealth }): Promise<CallToolResult> =>
+      withUi(
+        "Repair pass started.",
+        repairSceneRun({ sceneId, instruction, targetNodeIds, preferStealth }),
+      ),
+  );
+
+  registerAppTool(
+    server,
+    "get_scene_info",
+    {
+      title: "Get scene info",
+      description: "Use this when you want the current Blender scene grounding directly from the live bridge.",
       inputSchema: {},
-      outputSchema: usageStatsSchema,
+      outputSchema: sceneGroundingSchema.nullable(),
+      _meta: {},
     },
     async (): Promise<CallToolResult> => {
-      const result = skillUsageStats();
+      const result = await readBlenderSceneGrounding();
       return {
-        content: narrate(`Radar is tracking ${result.total_skills} seeded skills and ${result.total_runs} cumulative runs.`),
-        structuredContent: result,
+        content: narrate(result ? `Read Blender scene ${result.scene_name}.` : "Blender scene grounding is unavailable."),
+        structuredContent: (result ?? undefined) as Record<string, unknown> | undefined,
       };
     },
   );
 
   registerAppTool(
     server,
-    "render_registry_dashboard",
+    "execute_blender_code",
     {
-      title: "Render registry dashboard",
-      description: "Use this when you want the Radar widget to show the live skill genome and compiler loop in one place.",
+      title: "Execute Blender code",
+      description: "Use this when you need to send a direct Python snippet to Blender through the MCP bridge.",
       inputSchema: {
-        focusCategory: z.string().optional(),
+        code: z.string().min(1),
       },
       outputSchema: z.object({
-        view: z.literal("dashboard"),
-        title: z.string(),
-        subtitle: z.string(),
-        stats: z.array(
-          z.object({
-            label: z.string(),
-            value: z.string(),
-            detail: z.string(),
-          }),
-        ),
-        pipeline: z.array(z.object({ label: z.string(), detail: z.string() })),
-        skills: z.array(skillRecordSchema),
-        watchlist: z.array(z.object({ title: z.string(), status: z.string(), detail: z.string() })),
-        quick_actions: z.array(z.string()),
+        ok: z.boolean(),
+        result: z.unknown().optional(),
       }),
-      _meta: {
-        ui: { resourceUri },
-      },
+      _meta: {},
     },
-    async ({ focusCategory }): Promise<CallToolResult> => {
-      const result = renderRegistryDashboard(focusCategory);
+    async ({ code }): Promise<CallToolResult> => {
+      const result = await executeBlenderCode(code);
       return {
-        content: narrate("Rendered the Radar dashboard."),
-        structuredContent: result,
+        content: narrate("Executed Blender code through the live bridge."),
+        structuredContent: { ok: true, result },
       };
     },
   );
 
   registerAppTool(
     server,
-    "render_skill_card",
+    "get_viewport_screenshot",
     {
-      title: "Render skill card",
-      description: "Use this when you want the widget to focus on one skill's evidence, evals, and quick actions.",
+      title: "Get viewport screenshot",
+      description: "Use this when you want a current viewport image from Blender for grounding or verification.",
       inputSchema: {
-        skillId: z.string().optional(),
+        maxSize: z.number().int().min(256).max(2048).optional(),
       },
       outputSchema: z.object({
-        view: z.literal("skill"),
-        title: z.string(),
-        subtitle: z.string(),
-        skill: skillRecordSchema,
-        sources: z.array(z.object({ url: z.url(), note: z.string() })),
-        evals: z.array(
-          z.object({
-            eval_id: z.string(),
-            skill_id: z.string(),
-            version: z.string(),
-            round: z.string(),
-            prompt: z.string(),
-            expected_skill: z.string(),
-            actual_skill: z.string(),
-            passed: z.boolean(),
-            metrics: z.object({
-              trigger_correct: z.boolean(),
-              schema_valid: z.boolean(),
-              source_citation_present: z.boolean(),
-              latency_ms: z.number(),
-            }),
-            notes: z.string(),
-          }),
-        ),
-        quick_actions: z.array(z.string()),
+        image: z.string().nullable(),
       }),
-      _meta: {
-        ui: { resourceUri },
-      },
+      _meta: {},
     },
-    async ({ skillId }): Promise<CallToolResult> => {
-      const result = renderSkillCard(skillId);
+    async ({ maxSize }): Promise<CallToolResult> => {
+      const image = await getViewportScreenshot(maxSize ?? 1200);
       return {
-        content: narrate(`Rendered ${result.skill.name}.`),
-        structuredContent: result,
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    "render_run_result",
-    {
-      title: "Render run result",
-      description: "Use this when you want the widget to show a routed answer, the evidence behind it, and the next compiler move.",
-      inputSchema: {
-        query: z.string().min(3),
-        skillId: z.string().optional(),
-      },
-      outputSchema: z.object({
-        view: z.literal("run"),
-        title: z.string(),
-        subtitle: z.string(),
-        outcome: z.object({
-          verdict: z.string(),
-          rationale: z.array(z.string()),
-          next_step: z.string(),
-        }),
-        citations: z.array(z.object({ label: z.string(), url: z.url() })),
-      }),
-      _meta: {
-        ui: { resourceUri },
-      },
-    },
-    async ({ query, skillId }): Promise<CallToolResult> => {
-      const result = renderRunResult(query, skillId);
-      return {
-        content: narrate(result.outcome.verdict),
-        structuredContent: result,
+        content: narrate(image ? "Fetched Blender viewport screenshot." : "Viewport screenshot is unavailable."),
+        structuredContent: { image },
       };
     },
   );
@@ -390,8 +219,8 @@ export function createServer(): McpServer {
         ui: {
           prefersBorder: false,
           csp: {
-            connectDomains: [],
-            resourceDomains: [],
+            connectDomains: [process.env.TINYFISH_API_BASE ?? "https://agent.tinyfish.ai"],
+            resourceDomains: ["https://docs.tinyfish.ai", "https://docs.blender.org"],
           },
         },
       },

@@ -1,79 +1,72 @@
+import { randomUUID } from "node:crypto";
 import {
-  compilerDecisionKindSchema,
-  type CompilerDecision,
-  type DashboardPayload,
-  type PatchJob,
-  type RadarPayload,
-  type RunPayload,
-  type SkillMatch,
-  type SkillPayload,
-  type SkillRecord,
-  type SourceKind,
-  type SourceScan,
-  type SurfaceType,
-  type UsageStats,
-  type WorkflowSpec,
+  type BlenderCommandPlan,
+  type BlenderRunState,
+  type BrowserMode,
+  type CheckpointKind,
+  checkpointKindSchema,
+  type SceneEvidence,
+  type SceneGraphEdge,
+  type SceneGrounding,
+  type SceneGraphNode,
+  type SceneObject,
+  scenePhaseSchema,
+  sceneSessionSchema,
+  type SceneSession,
+  sceneSpecSchema,
+  type SceneSpec,
+  type SceneValidationIssue,
+  type SceneWorkflowSkill,
+  type SourceCandidate,
+  type TinyFishEvent,
+  type TinyFishEventType,
 } from "../shared/contracts.js";
-import { productLine, seedEvals, seedSkills, seedSources, surfacePresets } from "../shared/seed.js";
+import {
+  defaultGoal,
+  defaultResearchSources,
+  demoBlenderCommandPlan,
+  demoBlenderState,
+  demoEvidence,
+  demoSceneSpec,
+  productLine,
+  tinyFishCapabilityProfile,
+} from "../shared/seed.js";
+import { applyBlenderPlan, blenderBridgeConfigured, readBlenderSceneGrounding } from "./blender-bridge.js";
+import { normalizeTinyFishEvent, streamTinyFishRun, tinyFishConfigured, type TinyFishRawEvent } from "./tinyfish-client.js";
 
-type DiscoverSourcesInput = {
-  topic: string;
-  sourceKinds?: SourceKind[];
-  preferLiveBrowser?: boolean;
+type StartSceneResearchInput = {
+  goal: string;
+  sourceUrl?: string;
+  browserProfile?: Extract<BrowserMode, "lite" | "stealth">;
 };
 
-type ExtractWorkflowInput = {
-  title: string;
-  description?: string;
-  sourceUrls: string[];
-  desiredSurface?: SurfaceType;
+type ValidateSceneGraphInput = {
+  sceneId: string;
 };
 
-type FindSkillsInput = {
-  category?: string;
-  tags?: string[];
-  workflowTitle?: string;
+type ApplySceneToBlenderInput = {
+  sceneId: string;
+  replayFailedOnly?: boolean;
 };
 
-type CompileSkillInput = {
-  workflowSpec: WorkflowSpec;
-  preferredStrategy?: CompilerDecision["decision"];
+type RepairSceneRunInput = {
+  sceneId: string;
+  instruction?: string;
+  targetNodeIds?: string[];
+  preferStealth?: boolean;
 };
 
-type PatchSkillInput = {
-  skillId: string;
-  reason: string;
-  changedSources?: string[];
-};
+const sessions = new Map<string, SceneSession>();
+const jobs = new Map<string, Promise<void>>();
+let latestSceneId: string | null = null;
 
-type ListSkillsInput = {
-  category?: string;
-  tag?: string;
-  status?: SkillRecord["status"];
-};
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
 
-const pipeline = [
-  {
-    label: "Watch sources",
-    detail: "Start with public repos, docs, changelogs, and demo pages.",
-  },
-  {
-    label: "Normalize workflow",
-    detail: "Turn rough instructions into a versioned JSON spec with evidence.",
-  },
-  {
-    label: "Retrieve before generate",
-    detail: "Search the skill bank for the nearest reusable patterns first.",
-  },
-  {
-    label: "Compile and surface",
-    detail: "Emit a skill plus a widget or chat surface that feels executable.",
-  },
-  {
-    label: "Patch on drift",
-    detail: "Open eval-gated patch jobs whenever the public source moves.",
-  },
-];
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function slugify(value: string): string {
   return value
@@ -84,522 +77,1307 @@ function slugify(value: string): string {
     .slice(0, 48);
 }
 
-function uniq<T>(values: T[]): T[] {
-  return [...new Set(values)];
+function titleCase(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
-function inferSourceKind(url: string): SourceKind {
-  if (url.includes("github.com")) {
-    return "github";
-  }
-  if (url.includes("changelog")) {
-    return "changelog";
-  }
-  if (url.includes("developers.openai.com") || url.includes("/docs")) {
-    return "docs";
-  }
-  if (url.includes("demo") || url.includes("play")) {
-    return "demo";
-  }
-  return "product";
-}
-
-function inferScan(url: string): SourceScan {
-  const sourceKind = inferSourceKind(url);
-  const recommendedPath = sourceKind === "demo" || sourceKind === "product" ? "tinyfish" : "fetch";
-  const browserMode = recommendedPath === "tinyfish" ? "lite" : "none";
-
+function phaseLabel(phase: SceneSession["phase"]): string {
   return {
-    url,
-    source_kind: sourceKind,
-    recommended_path: recommendedPath,
-    browser_mode: browserMode,
-    blocked: false,
-    note:
-      recommendedPath === "tinyfish"
-        ? "Dynamic or judge-facing surface detected. Escalate to TinyFish only for the interactive pass."
-        : "Cheap parse is enough here. Keep TinyFish in reserve.",
+    idle: "Standing by for a source drop",
+    researching: "TinyFish is running the live research pass",
+    normalizing: "Codex is shaping research into a scene spec",
+    ready: "Scene graph is staged for validation and Blender",
+    validating: "Codex is checking evidence, ambiguity, and drift",
+    repairing: "Codex is repairing the graph with tighter instructions",
+    applying: "Blender actions are being applied",
+    completed: "Scene applied and presentation ready",
+    error: "Run needs intervention",
+  }[phase];
+}
+
+function topicKeywords(goal: string): string[] {
+  return [...new Set(goal.toLowerCase().split(/[^a-z0-9]+/g).filter((token) => token.length > 3))].slice(0, 8);
+}
+
+function evidenceFromSource(source: SourceCandidate, index: number): SceneEvidence {
+  return {
+    id: `src-${index + 1}-${slugify(source.title)}`,
+    label: source.title,
+    url: source.url,
+    snippet: source.reason,
+    source_kind: source.kind,
   };
 }
 
-function titleTokens(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .filter((token) => token.length > 2);
-}
+function rankSources(goal: string, sourceUrl?: string): SourceCandidate[] {
+  const tokens = topicKeywords(goal);
+  const scored = defaultResearchSources.map((source) => {
+    const haystack = `${source.title} ${source.reason} ${source.url}`.toLowerCase();
+    const score = tokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
+    return { source, score };
+  });
 
-function makeTags(title: string, description?: string): string[] {
-  const tokens = [...titleTokens(title), ...titleTokens(description ?? "")];
-  const tags = new Set<string>(["workflow-compiler", "mcp"]);
+  scored.sort((left, right) => right.score - left.score);
 
-  for (const token of tokens) {
-    if (token.includes("doc")) tags.add("documentation");
-    if (token.includes("browser") || token.includes("crawl")) tags.add("browser-automation");
-    if (token.includes("widget")) tags.add("widget");
-    if (token.includes("menu")) tags.add("menu-bar");
-    if (token.includes("patch") || token.includes("drift")) tags.add("patch-loop");
-    if (token.includes("repo") || token.includes("github")) tags.add("github");
-    if (token.includes("swift")) tags.add("swiftui");
-    if (token.includes("tool")) tags.add("tooling");
+  const shortlist = scored.map((entry) => entry.source);
+  if (!sourceUrl) {
+    return shortlist.slice(0, 5);
   }
 
-  for (const token of tokens.slice(0, 4)) {
-    tags.add(token);
+  const matched = shortlist.find((source) => source.url === sourceUrl);
+  if (matched) {
+    return [matched, ...shortlist.filter((source) => source.url !== sourceUrl)].slice(0, 5);
   }
 
-  return [...tags].slice(0, 8);
+  const customSource: SourceCandidate = {
+    id: `custom-${slugify(sourceUrl)}`,
+    title: titleCase(sourceUrl.split("/").filter(Boolean).slice(-1)[0] ?? "Selected source"),
+    url: sourceUrl,
+    kind: sourceUrl.includes("docs") ? "docs" : sourceUrl.includes("api") ? "api" : "moodboard",
+    requires_browser: true,
+    recommended_browser_mode: "lite",
+    reason: "Manually dropped onto the graph as the primary research seed.",
+  };
+
+  return [customSource, ...shortlist].slice(0, 5);
 }
 
-function bumpPatch(version: string): string {
-  const [major = "0", minor = "1", patch = "0"] = version.split(".");
-  return `${major}.${minor}.${Number(patch) + 1}`;
+function deriveProjectTitle(goal: string): string {
+  const trimmed = goal.replace(/\.$/, "").trim();
+  if (!trimmed) {
+    return demoSceneSpec.project_title;
+  }
+  return titleCase(trimmed.split(/\s+/).slice(0, 6).join(" "));
 }
 
-function computeSkillMatches(input: FindSkillsInput): SkillMatch[] {
-  const requestedTags = uniq(input.tags ?? []);
-  const requestedTitleTokens = titleTokens(input.workflowTitle ?? "");
-  const requestedCategory = input.category?.toLowerCase();
+function detectMood(goal: string) {
+  const lower = goal.toLowerCase();
+  if (lower.includes("dream")) {
+    return { mood: "dreamlike and fragile", lighting: "silvery with soft bloom", time: "predawn blue hour" };
+  }
+  if (lower.includes("doc") || lower.includes("truth")) {
+    return { mood: "documentary tension", lighting: "practical and unforgiving", time: "late evening" };
+  }
+  if (lower.includes("burnout") || lower.includes("struggle")) {
+    return { mood: "focused but frayed", lighting: "low-key and oppressive", time: "02:17 AM" };
+  }
+  return { mood: demoSceneSpec.environment.mood, lighting: demoSceneSpec.lighting.overall_feel, time: demoSceneSpec.environment.time_of_day };
+}
 
-  return seedSkills
-    .map((skill) => {
-      const tagHits = skill.tags.filter((tag) => requestedTags.includes(tag)).length;
-      const titleHits = titleTokens(skill.name).filter((token) => requestedTitleTokens.includes(token)).length;
-      const categoryBonus =
-        requestedCategory && skill.category.toLowerCase() === requestedCategory ? 0.35 : 0;
-      const tagScore = requestedTags.length > 0 ? (tagHits / requestedTags.length) * 0.45 : 0;
-      const titleScore = requestedTitleTokens.length > 0 ? (titleHits / requestedTitleTokens.length) * 0.2 : 0;
-      const score = Number(Math.min(categoryBonus + tagScore + titleScore + skill.eval_score * 0.15, 0.98).toFixed(2));
+function groundingBriefLines(grounding: SceneGrounding | null): string[] {
+  if (!grounding) {
+    return ["No live Blender grounding yet. Codex will treat the scene as blank previs territory."];
+  }
 
-      return {
-        skill_id: skill.skill_id,
-        score,
-      };
-    })
-    .sort((left, right) => right.score - left.score)
+  const visibleObjects =
+    grounding.object_names.length > 8
+      ? `${grounding.object_names.slice(0, 8).join(", ")}, +${grounding.object_names.length - 8} more`
+      : grounding.object_names.join(", ") || "none";
+
+  return [
+    `${grounding.scene_name} at frame ${grounding.current_frame}/${grounding.frame_end}.`,
+    grounding.active_object ? `Active object: ${grounding.active_object}.` : "No active object selected.",
+    `Visible objects: ${visibleObjects}.`,
+  ];
+}
+
+function tinyFishSceneSpecTemplate(): string {
+  return JSON.stringify(
+    {
+      project_title: "string",
+      topic: "string",
+      scene_goal: "string",
+      style_keywords: ["string"],
+      environment: {
+        location_type: "string",
+        time_of_day: "string",
+        weather: "string",
+        mood: "string",
+        scale: "string",
+      },
+      objects: [
+        {
+          name: "string",
+          category: "prop | setpiece | character | vehicle | fx | note",
+          description: "string",
+          material: "string",
+          color: "string",
+          approx_size: "string",
+          placement_hint: "string",
+          importance: 1,
+          confidence: 0.5,
+        },
+      ],
+      camera: {
+        shot_type: "string",
+        lens_feel: "string",
+        framing_notes: "string",
+      },
+      lighting: {
+        key_light: "string",
+        fill_light: "string",
+        rim_light: "string",
+        practicals: ["string"],
+        overall_feel: "string",
+      },
+      animation_cues: ["string"],
+      composition_rules: ["string"],
+      must_include: ["string"],
+      avoid: ["string"],
+    },
+    null,
+    2,
+  );
+}
+
+function buildHeuristicSceneSpec(goal: string, sources: SourceCandidate[], sceneId: string): SceneSpec {
+  const mood = detectMood(goal);
+  const keywords = topicKeywords(goal);
+  const citations = [...demoEvidence, ...sources.map(evidenceFromSource)].slice(0, 6);
+
+  const objects: SceneObject[] = demoSceneSpec.objects.map((item, index) => ({
+    ...item,
+    id: `${sceneId}-${item.id}`,
+    citations: item.citations.length ? item.citations : citations.slice(index, index + 2),
+  }));
+
+  if (keywords.some((token) => token.includes("deadline"))) {
+    objects.push({
+      id: `${sceneId}-deadline-wall`,
+      name: "Wall of missed milestones",
+      category: "note",
+      description: "A timeline board showing slips, revisions, and redlined deadlines.",
+      material: "paper, tape, pencil",
+      color: "off-white with red pen marks",
+      approx_size: "1.4m x 0.8m",
+      placement_hint: "background wall behind the camera line",
+      importance: 3,
+      confidence: 0.72,
+      citations: citations.slice(0, 2),
+    });
+  }
+
+  const spec: SceneSpec = {
+    scene_id: sceneId,
+    project_title: deriveProjectTitle(goal),
+    topic: goal,
+    scene_goal: goal,
+    style_keywords: [...new Set(["cinematic", "grounded", "editable", ...keywords.slice(0, 4)])],
+    environment: {
+      location_type: demoSceneSpec.environment.location_type,
+      time_of_day: mood.time,
+      weather: demoSceneSpec.environment.weather,
+      mood: mood.mood,
+      scale: demoSceneSpec.environment.scale,
+    },
+    objects,
+    camera: {
+      ...demoSceneSpec.camera,
+      framing_notes: `${demoSceneSpec.camera.framing_notes} Codex should keep the scene readable for a live judge demo.`,
+    },
+    lighting: {
+      ...demoSceneSpec.lighting,
+      overall_feel: mood.lighting,
+    },
+    animation_cues: clone(demoSceneSpec.animation_cues),
+    composition_rules: clone(demoSceneSpec.composition_rules),
+    must_include: clone(demoSceneSpec.must_include),
+    avoid: clone(demoSceneSpec.avoid),
+    citations,
+  };
+
+  return sceneSpecSchema.parse(spec);
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeSceneSpec(raw: unknown, session: SceneSession): SceneSpec {
+  if (!raw || typeof raw !== "object") {
+    return buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+  }
+
+  const data = raw as Record<string, unknown>;
+  const citations = session.available_sources.map(evidenceFromSource);
+  const objectSource = Array.isArray(data.objects) ? data.objects : [];
+  const objects: SceneObject[] = objectSource.slice(0, 8).map((item, index) => {
+    const object = item as Record<string, unknown>;
+    const sourceEvidence = citations.slice(index, index + 2);
+    return {
+      id: `${session.scene_id}-obj-${index + 1}`,
+      name: stringValue(object.name, `Scene object ${index + 1}`),
+      category:
+        object.category === "setpiece" ||
+        object.category === "character" ||
+        object.category === "vehicle" ||
+        object.category === "fx" ||
+        object.category === "note"
+          ? object.category
+          : "prop",
+      description: stringValue(object.description, "Extracted from TinyFish research."),
+      material: stringValue(object.material, "placeholder material"),
+      color: stringValue(object.color, "neutral grey"),
+      approx_size: stringValue(object.approx_size, "medium"),
+      placement_hint: stringValue(object.placement_hint, "position during scene blocking"),
+      importance:
+        typeof object.importance === "number" && object.importance >= 1 && object.importance <= 5
+          ? object.importance
+          : Math.min(5, index + 2),
+      confidence: typeof object.confidence === "number" ? Math.max(0, Math.min(1, object.confidence)) : 0.72,
+      citations: sourceEvidence.length ? sourceEvidence : citations.slice(0, 1),
+    };
+  });
+
+  const candidate = {
+    scene_id: session.scene_id,
+    project_title: stringValue(data.project_title, deriveProjectTitle(session.goal)),
+    topic: stringValue(data.topic, session.goal),
+    scene_goal: stringValue(data.scene_goal, session.goal),
+    style_keywords: Array.isArray(data.style_keywords)
+      ? data.style_keywords.filter((value): value is string => typeof value === "string").slice(0, 8)
+      : topicKeywords(session.goal),
+    environment: {
+      location_type: stringValue((data.environment as Record<string, unknown> | undefined)?.location_type, demoSceneSpec.environment.location_type),
+      time_of_day: stringValue((data.environment as Record<string, unknown> | undefined)?.time_of_day, demoSceneSpec.environment.time_of_day),
+      weather: stringValue((data.environment as Record<string, unknown> | undefined)?.weather, demoSceneSpec.environment.weather),
+      mood: stringValue((data.environment as Record<string, unknown> | undefined)?.mood, demoSceneSpec.environment.mood),
+      scale: stringValue((data.environment as Record<string, unknown> | undefined)?.scale, demoSceneSpec.environment.scale),
+    },
+    objects: objects.length ? objects : buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id).objects,
+    camera: {
+      shot_type: stringValue((data.camera as Record<string, unknown> | undefined)?.shot_type, demoSceneSpec.camera.shot_type),
+      lens_feel: stringValue((data.camera as Record<string, unknown> | undefined)?.lens_feel, demoSceneSpec.camera.lens_feel),
+      framing_notes: stringValue((data.camera as Record<string, unknown> | undefined)?.framing_notes, demoSceneSpec.camera.framing_notes),
+    },
+    lighting: {
+      key_light: stringValue((data.lighting as Record<string, unknown> | undefined)?.key_light, demoSceneSpec.lighting.key_light),
+      fill_light: stringValue((data.lighting as Record<string, unknown> | undefined)?.fill_light, demoSceneSpec.lighting.fill_light),
+      rim_light: stringValue((data.lighting as Record<string, unknown> | undefined)?.rim_light, demoSceneSpec.lighting.rim_light),
+      practicals: Array.isArray((data.lighting as Record<string, unknown> | undefined)?.practicals)
+        ? ((data.lighting as Record<string, unknown>).practicals as unknown[]).filter((value): value is string => typeof value === "string").slice(0, 6)
+        : demoSceneSpec.lighting.practicals,
+      overall_feel: stringValue((data.lighting as Record<string, unknown> | undefined)?.overall_feel, demoSceneSpec.lighting.overall_feel),
+    },
+    animation_cues: Array.isArray(data.animation_cues)
+      ? data.animation_cues.filter((value): value is string => typeof value === "string").slice(0, 5)
+      : demoSceneSpec.animation_cues,
+    composition_rules: Array.isArray(data.composition_rules)
+      ? data.composition_rules.filter((value): value is string => typeof value === "string").slice(0, 5)
+      : demoSceneSpec.composition_rules,
+    must_include: Array.isArray(data.must_include)
+      ? data.must_include.filter((value): value is string => typeof value === "string").slice(0, 6)
+      : demoSceneSpec.must_include,
+    avoid: Array.isArray(data.avoid)
+      ? data.avoid.filter((value): value is string => typeof value === "string").slice(0, 6)
+      : demoSceneSpec.avoid,
+    citations,
+  };
+
+  const parsed = sceneSpecSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+}
+
+function buildBlenderCommandPlan(sceneSpec: SceneSpec): BlenderCommandPlan {
+  const base = clone(demoBlenderCommandPlan);
+  base.scene_id = sceneSpec.scene_id;
+  base.summary = `Build "${sceneSpec.project_title}" as an editable previs scene with collections, hero props, cameras, lights, and notes.`;
+  base.actions = base.actions.map((action, index) => ({
+    ...action,
+    id: `${sceneSpec.scene_id}-action-${index + 1}`,
+    status: "pending",
+    target_node_ids:
+      action.kind === "mesh"
+        ? sceneSpec.objects.slice(0, 3).map((object) => object.id)
+        : action.kind === "annotation"
+          ? sceneSpec.objects.filter((object) => object.category === "note").map((object) => object.id)
+          : action.target_node_ids,
+  }));
+  return base;
+}
+
+function buildSceneWorkflowSkills(sceneSpec: SceneSpec, grounding: SceneGrounding | null): SceneWorkflowSkill[] {
+  const heroObjects = [...sceneSpec.objects]
+    .sort((left, right) => right.importance - left.importance)
     .slice(0, 3);
+  const heroNames = heroObjects.map((object) => object.name).join(", ");
+  const groundingSummary = grounding
+    ? `${grounding.scene_name} with ${grounding.object_count} observed objects`
+    : "a blank previs canvas";
+
+  return [
+    {
+      id: `${sceneSpec.scene_id}-skill-ground-scene`,
+      name: "Scene grounding reader",
+      purpose: "Read the current Blender scene and turn existing geometry into hard constraints before web research or new blocking.",
+      when_to_use: "Use first when Codex should adapt to an existing set instead of building from zero.",
+      steps: [
+        `Inspect ${groundingSummary}.`,
+        "Protect existing hero geometry and camera intent.",
+        "Translate live scene facts into constraints for downstream web research and blocking.",
+      ],
+      codex_prompt: `Read the current Blender scene for "${sceneSpec.project_title}", identify the fixed geometry and framing that must remain, and convert those into blocking constraints before any new scene actions run.`,
+      target_node_ids: [`${sceneSpec.scene_id}-grounding`, ...heroObjects.map((object) => object.id)].filter(Boolean),
+    },
+    {
+      id: `${sceneSpec.scene_id}-skill-reference-blockout`,
+      name: "Research to blockout",
+      purpose: "Turn TinyFish research into concrete blockout objects, placements, and placeholders.",
+      when_to_use: "Use when the scene needs grounded props and set dressing from live web evidence.",
+      steps: [
+        "Extract concrete props and setpieces only.",
+        `Prioritize hero elements: ${heroNames || "the highest-confidence scene objects"}.`,
+        "Resolve ambiguity into placeholders and notes instead of hallucinated assets.",
+      ],
+      codex_prompt: `Using the current SceneSpec for "${sceneSpec.project_title}", convert the cited web research into deterministic Blender blockout instructions for the main objects, materials, and placements.`,
+      target_node_ids: sceneSpec.objects.map((object) => object.id),
+    },
+    {
+      id: `${sceneSpec.scene_id}-skill-camera-language`,
+      name: "Camera language pass",
+      purpose: "Convert the scene goal into a hero camera and support coverage that still reads clearly in previs.",
+      when_to_use: "Use when Codex should tighten framing, focal hierarchy, or support-shot coverage.",
+      steps: [
+        `Anchor the scene around a ${sceneSpec.camera.shot_type}.`,
+        `Preserve the lens feel: ${sceneSpec.camera.lens_feel}.`,
+        "Stage one hero shot and two support shots that keep the strongest story beats readable.",
+      ],
+      codex_prompt: `Create a camera blocking pass for "${sceneSpec.project_title}" that follows this direction: ${sceneSpec.camera.framing_notes}`,
+      target_node_ids: [`${sceneSpec.scene_id}-camera`, ...heroObjects.map((object) => object.id)],
+    },
+    {
+      id: `${sceneSpec.scene_id}-skill-lighting-rig`,
+      name: "Lighting mood rig",
+      purpose: "Translate the scene mood into a readable previs lighting setup with practicals and separation.",
+      when_to_use: "Use when the scene needs lighting that sells the mood without overcomplicating the blockout.",
+      steps: [
+        `Carry the overall feel: ${sceneSpec.lighting.overall_feel}.`,
+        "Use key, fill, rim, and practicals only where they clarify the scene.",
+        "Keep the rig simple enough for live judge playback and editing.",
+      ],
+      codex_prompt: `Build a previs-ready lighting pass for "${sceneSpec.project_title}" using this direction: key ${sceneSpec.lighting.key_light}; fill ${sceneSpec.lighting.fill_light}; rim ${sceneSpec.lighting.rim_light}.`,
+      target_node_ids: [`${sceneSpec.scene_id}-lighting`, ...heroObjects.map((object) => object.id)],
+    },
+  ];
 }
 
-function decideStrategy(matches: SkillMatch[]): CompilerDecision["decision"] {
-  const [best = { score: 0 }, second = { score: 0 }] = matches;
+function refreshDerivedArtifacts(session: SceneSession) {
+  if (!session.scene_spec) {
+    session.workflow_skills = [];
+    return;
+  }
 
-  if (best.score >= 0.85) {
-    return "reuse";
-  }
-  if (best.score >= 0.62) {
-    return "fork";
-  }
-  if (best.score >= 0.45 && second.score >= 0.35) {
-    return "compose";
-  }
-  return "create";
+  session.workflow_skills = buildSceneWorkflowSkills(session.scene_spec, session.grounding);
+  session.blender.command_plan = buildBlenderCommandPlan(session.scene_spec);
 }
 
-function buildDecision(input: FindSkillsInput, preferredStrategy?: CompilerDecision["decision"]): CompilerDecision {
-  const nearestSkills = computeSkillMatches(input);
-  const decision = preferredStrategy ?? decideStrategy(nearestSkills);
-  const leadSkill = seedSkills.find((skill) => skill.skill_id === nearestSkills[0]?.skill_id);
+function createBaseBlenderState(sceneId: string): BlenderRunState {
+  const state = clone(demoBlenderState);
+  state.bridge_mode = blenderBridgeConfigured() ? "live" : "fallback";
+  state.endpoint_configured = blenderBridgeConfigured();
+  state.summary = blenderBridgeConfigured()
+    ? "Live Blender bridge configured and waiting for an apply command."
+    : "Live Blender bridge not configured yet. Fallback export is ready if needed.";
+  state.command_plan = {
+    ...clone(demoBlenderCommandPlan),
+    scene_id: sceneId,
+    actions: clone(demoBlenderCommandPlan.actions).map((action, index) => ({
+      ...action,
+      id: `${sceneId}-action-${index + 1}`,
+      status: "pending",
+    })),
+  };
+  return state;
+}
 
-  const reasonByDecision: Record<CompilerDecision["decision"], string> = {
-    reuse: "A close skill already covers the workflow shape, so reuse keeps the demo fast and believable.",
-    fork: "A related skill exists, but the surface and evidence model need a tailored branch.",
-    compose: "The workflow spans multiple capability clusters, so composition is safer than a brand new skill.",
-    create: "No close skill covers this route well enough yet, so create a fresh entry in the catalog.",
+function createEmptySession(goal = defaultGoal): SceneSession {
+  const sceneId = `scene-${slugify(goal) || "bootstrap"}-${randomUUID().slice(0, 8)}`;
+  const sources = rankSources(goal);
+
+  const session: SceneSession = {
+    view: "orchestrator",
+    scene_id: sceneId,
+    title: "TinyFish Web-to-Previs Orchestrator",
+    subtitle: productLine,
+    goal,
+    phase: "idle",
+    phase_label: phaseLabel("idle"),
+    updated_at: new Date().toISOString(),
+    narrative: {
+      codex_role: "Codex reads the current Blender scene, runs TinyFish on the web, validates the SceneSpec, and then stages an editable previs blockout.",
+      operator_brief: [
+        "Read Blender scene info before beginning any research so the crawl stays grounded in what already exists.",
+        "Use TinyFish run-sse because the live stream proves the research pass to judges.",
+        "Prefer lite before stealth unless the page blocks or turns suspicious.",
+        "Hold uncertainty in notes and placeholders instead of hallucinating final art.",
+      ],
+      next_best_move: "Capture the current Blender scene, then launch the research pass from the header.",
+    },
+    capability_profile: tinyFishCapabilityProfile,
+    available_sources: sources,
+    graph: { nodes: [], edges: [] },
+    checkpoints: [],
+    tinyfish: {
+      enabled: tinyFishConfigured(),
+      live: false,
+      browser_profile: "lite",
+      status: tinyFishConfigured() ? "Ready to launch run-sse." : "No API key detected. Demo mode will simulate the live run.",
+      run_id: null,
+      streaming_url: null,
+      docs_reasoning: [
+        "Primary endpoint: POST /v1/automation/run-sse",
+        "Expected stream: STARTED, STREAMING_URL, PROGRESS, COMPLETE, plus heartbeats",
+        "Public-web demo keeps vault credentials off and defaults to lite browsing",
+        "Codex prepends current Blender scene grounding so the crawl returns scene-relevant JSON, not generic inspiration",
+      ],
+      events: [],
+    },
+    grounding: null,
+    scene_spec: null,
+    workflow_skills: [],
+    validation: {
+      status: "pending",
+      summary: "No validation run yet.",
+      issues: [],
+    },
+    blender: createBaseBlenderState(sceneId),
+    quick_actions: ["Research", "Validate", "Apply to Blender", "Replay failed", "Export scene_spec.json"],
+    cluster_placeholder: "Merge the selected nodes into a stronger cinematic instruction...",
+    export_filename: `${sceneId}.scene_spec.json`,
   };
 
+  syncSession(session);
+  return session;
+}
+
+function checkpointStatusForKind(kind: CheckpointKind, session: SceneSession): SceneGraphNode["status"] {
+  const checkpoint = session.checkpoints.find((entry) => entry.kind === kind);
+  return checkpoint?.status ?? "idle";
+}
+
+function nodeForSource(source: SourceCandidate, index: number, total: number): SceneGraphNode {
+  const y = total === 1 ? 50 : 18 + index * (64 / Math.max(total - 1, 1));
   return {
-    decision: compilerDecisionKindSchema.parse(decision),
-    reason: reasonByDecision[decision],
-    nearest_skills: nearestSkills,
-    composed_from:
-      decision === "compose"
-        ? nearestSkills.slice(0, 2).map((skill) => skill.skill_id)
-        : [],
-    forked_from: decision === "fork" ? leadSkill?.skill_id ?? null : null,
+    id: source.id,
+    type: "research_source",
+    status: source.requires_browser ? "queued" : "ready",
+    label: source.title,
+    summary: source.reason,
+    detail_lines: [
+      `Kind: ${source.kind}`,
+      `Browser: ${source.recommended_browser_mode}`,
+      source.requires_browser ? "Can be dropped to trigger a live TinyFish pass." : "Can be used as cheap grounding before the browser run.",
+    ],
+    x: 11,
+    y,
+    citations: [evidenceFromSource(source, index)],
+    clusterable: false,
   };
 }
 
-function getSkill(skillId?: string): SkillRecord {
-  return seedSkills.find((skill) => skill.skill_id === skillId) ?? seedSkills[0];
+function buildGraph(session: SceneSession): { nodes: SceneGraphNode[]; edges: SceneGraphEdge[] } {
+  const nodes: SceneGraphNode[] = [];
+  const edges: SceneGraphEdge[] = [];
+
+  session.available_sources.forEach((source, index) => {
+    nodes.push(nodeForSource(source, index, session.available_sources.length));
+    edges.push({
+      id: `edge-${source.id}-tf`,
+      source: source.id,
+      target: `${session.scene_id}-tinyfish`,
+      kind: "feeds",
+      label: "research seed",
+    });
+  });
+
+  if (session.grounding) {
+    nodes.push({
+      id: `${session.scene_id}-grounding`,
+      type: "scene_grounding",
+      status: checkpointStatusForKind("scene_grounded", session) || "ready",
+      label: "Scene Grounder",
+      summary: `${session.grounding.scene_name} • ${session.grounding.object_count} objects • frame ${session.grounding.current_frame}`,
+      detail_lines: session.grounding.summary_lines,
+      x: 31,
+      y: 18,
+      citations: [],
+      clusterable: false,
+    });
+
+    edges.push({
+      id: `edge-${session.scene_id}-grounding-tf`,
+      source: `${session.scene_id}-grounding`,
+      target: `${session.scene_id}-tinyfish`,
+      kind: "feeds",
+      label: "grounds research",
+    });
+  }
+
+  nodes.push({
+    id: `${session.scene_id}-tinyfish`,
+    type: "tinyfish_run",
+    status:
+      session.phase === "researching" || session.phase === "normalizing"
+        ? "running"
+        : session.phase === "error"
+          ? "error"
+          : session.tinyfish.events.length
+            ? "ready"
+            : "queued",
+    label: session.tinyfish.live ? "TinyFish live run" : "TinyFish orchestration lane",
+    summary: session.tinyfish.status,
+    detail_lines: [
+      `Browser profile: ${session.tinyfish.browser_profile}`,
+      `Primary endpoint: ${session.capability_profile.primary_endpoint}`,
+      session.tinyfish.streaming_url ? "Live browser stream available." : "No streaming URL yet.",
+    ],
+    x: 31,
+    y: 38,
+    citations: [demoEvidence[0], demoEvidence[1]],
+    clusterable: false,
+  });
+
+  session.checkpoints.forEach((checkpoint, index) => {
+    const nodeId = `${session.scene_id}-checkpoint-${checkpoint.kind}`;
+    nodes.push({
+      id: nodeId,
+      type: "scene_checkpoint",
+      status: checkpoint.status,
+      label: checkpoint.kind.replaceAll("_", " "),
+      summary: checkpoint.note,
+      detail_lines: [checkpoint.note],
+      x: 47,
+      y: 18 + index * 10,
+      citations: [],
+      clusterable: false,
+    });
+
+    edges.push({
+      id: `edge-${session.scene_id}-tf-${checkpoint.kind}`,
+      source: `${session.scene_id}-tinyfish`,
+      target: nodeId,
+      kind: "reports",
+      label: "checkpoint",
+    });
+  });
+
+  if (session.scene_spec) {
+    session.scene_spec.objects.forEach((object, index) => {
+      const y = 18 + index * (56 / Math.max(session.scene_spec?.objects.length ?? 1, 1));
+      nodes.push({
+        id: object.id,
+        type: "scene_object",
+        status: session.validation.issues.some((issue) => issue.node_ids.includes(object.id) && issue.severity === "error")
+          ? "error"
+          : session.validation.issues.some((issue) => issue.node_ids.includes(object.id))
+            ? "warning"
+            : "ready",
+        label: object.name,
+        summary: object.description,
+        detail_lines: [
+          `${object.category} • ${object.material}`,
+          `Placement: ${object.placement_hint}`,
+          `Confidence: ${(object.confidence * 100).toFixed(0)}%`,
+        ],
+        x: 66,
+        y,
+        citations: object.citations,
+        clusterable: true,
+      });
+
+      edges.push({
+        id: `edge-obj-${object.id}`,
+        source: `${session.scene_id}-checkpoint-scene_graph_resolved`,
+        target: object.id,
+        kind: "resolves",
+        label: "scene object",
+      });
+    });
+
+    nodes.push({
+      id: `${session.scene_id}-camera`,
+      type: "camera",
+      status: checkpointStatusForKind("scene_graph_resolved", session),
+      label: "Camera language",
+      summary: session.scene_spec.camera.shot_type,
+      detail_lines: [session.scene_spec.camera.lens_feel, session.scene_spec.camera.framing_notes],
+      x: 83,
+      y: 24,
+      citations: session.scene_spec.citations.slice(0, 2),
+      clusterable: true,
+    });
+
+    nodes.push({
+      id: `${session.scene_id}-lighting`,
+      type: "lighting",
+      status: checkpointStatusForKind("scene_graph_resolved", session),
+      label: "Lighting rig",
+      summary: session.scene_spec.lighting.overall_feel,
+      detail_lines: [
+        `Key: ${session.scene_spec.lighting.key_light}`,
+        `Fill: ${session.scene_spec.lighting.fill_light}`,
+        `Rim: ${session.scene_spec.lighting.rim_light}`,
+      ],
+      x: 83,
+      y: 48,
+      citations: session.scene_spec.citations.slice(2, 4),
+      clusterable: true,
+    });
+
+    edges.push({
+      id: `edge-camera-plan-${session.scene_id}`,
+      source: `${session.scene_id}-checkpoint-scene_graph_resolved`,
+      target: `${session.scene_id}-camera`,
+      kind: "controls",
+      label: "frames",
+    });
+    edges.push({
+      id: `edge-light-plan-${session.scene_id}`,
+      source: `${session.scene_id}-checkpoint-scene_graph_resolved`,
+      target: `${session.scene_id}-lighting`,
+      kind: "controls",
+      label: "lights",
+    });
+  }
+
+  session.workflow_skills.forEach((skill, index) => {
+    const y = 18 + index * 14;
+    nodes.push({
+      id: skill.id,
+      type: "workflow_skill",
+      status: session.scene_spec ? "ready" : "queued",
+      label: skill.name,
+      summary: skill.purpose,
+      detail_lines: [skill.when_to_use, ...skill.steps.slice(0, 2)],
+      x: 78,
+      y,
+      citations: [],
+      clusterable: true,
+    });
+
+    edges.push({
+      id: `edge-${session.scene_id}-skill-${index + 1}`,
+      source: `${session.scene_id}-checkpoint-scene_graph_resolved`,
+      target: skill.id,
+      kind: "resolves",
+      label: "workflow",
+    });
+  });
+
+  session.blender.command_plan.actions.forEach((action, index) => {
+    nodes.push({
+      id: action.id,
+      type: "blender_action",
+      status:
+        action.status === "done"
+          ? "ready"
+          : action.status === "running"
+            ? "running"
+            : action.status === "failed"
+              ? "error"
+              : action.status === "blocked"
+                ? "blocked"
+                : "queued",
+      label: action.label,
+      summary: action.detail,
+      detail_lines: [action.command, `Mode: ${session.blender.bridge_mode}`],
+      x: 92,
+      y: 69 + index * 7,
+      citations: [],
+      clusterable: false,
+    });
+
+    const skill = session.workflow_skills.find((candidate) =>
+      candidate.target_node_ids.some((targetId) => action.target_node_ids.includes(targetId)),
+    );
+
+    if (skill) {
+      edges.push({
+        id: `edge-${skill.id}-${action.id}`,
+        source: skill.id,
+        target: action.id,
+        kind: "controls",
+        label: "drives Blender",
+      });
+    }
+
+    action.target_node_ids.forEach((targetId) => {
+      edges.push({
+        id: `edge-${targetId}-${action.id}`,
+        source: targetId,
+        target: action.id,
+        kind: "controls",
+        label: "feeds Blender",
+      });
+    });
+  });
+
+  session.validation.issues.forEach((issue, index) => {
+    const issueId = `${session.scene_id}-issue-${index + 1}`;
+    nodes.push({
+      id: issueId,
+      type: "validation_issue",
+      status: issue.severity === "error" ? "error" : "warning",
+      label: issue.code.replaceAll("_", " "),
+      summary: issue.message,
+      detail_lines: [issue.suggested_fix, issue.blocking ? "Blocking before live apply." : "Non-blocking issue."],
+      x: 59 + index * 9,
+      y: 88,
+      citations: [],
+      clusterable: false,
+    });
+
+    issue.node_ids.forEach((nodeId) => {
+      edges.push({
+        id: `edge-${issueId}-${nodeId}`,
+        source: issueId,
+        target: nodeId,
+        kind: "verifies",
+        label: "needs repair",
+      });
+    });
+  });
+
+  return { nodes, edges };
 }
 
-function statsFromSkills(skills: SkillRecord[]): UsageStats {
-  const tagCounts = new Map<string, number>();
+function syncSession(session: SceneSession) {
+  session.phase = scenePhaseSchema.parse(session.phase);
+  session.phase_label = phaseLabel(session.phase);
+  session.updated_at = new Date().toISOString();
+  session.graph = buildGraph(session);
+}
 
-  for (const skill of skills) {
-    for (const tag of skill.tags) {
-      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+function saveSession(session: SceneSession) {
+  syncSession(session);
+  sessions.set(session.scene_id, sceneSessionSchema.parse(session));
+  latestSceneId = session.scene_id;
+}
+
+function getSession(sceneId?: string): SceneSession {
+  if (sceneId && sessions.has(sceneId)) {
+    return sessions.get(sceneId)!;
+  }
+  if (latestSceneId && sessions.has(latestSceneId)) {
+    return sessions.get(latestSceneId)!;
+  }
+  const bootstrap = createEmptySession();
+  saveSession(bootstrap);
+  return bootstrap;
+}
+
+function addCheckpoint(session: SceneSession, kind: CheckpointKind, status: SceneGraphNode["status"], note: string) {
+  const existing = session.checkpoints.find((checkpoint) => checkpoint.kind === kind);
+  if (existing) {
+    existing.status = status;
+    existing.note = note;
+  } else {
+    session.checkpoints.push({
+      kind: checkpointKindSchema.parse(kind),
+      status,
+      note,
+    });
+  }
+  syncSession(session);
+}
+
+function addTinyFishEvent(session: SceneSession, type: TinyFishEventType, title: string, detail: string, options?: Partial<TinyFishEvent>) {
+  const event: TinyFishEvent = {
+    id: options?.id ?? `${session.scene_id}-${type}-${session.tinyfish.events.length + 1}`,
+    type,
+    title,
+    detail,
+    timestamp: options?.timestamp ?? new Date().toISOString(),
+    run_id: options?.run_id ?? session.tinyfish.run_id,
+    streaming_url: options?.streaming_url ?? null,
+  };
+  session.tinyfish.events = [...session.tinyfish.events, event].slice(-18);
+  if (event.streaming_url) {
+    session.tinyfish.streaming_url = event.streaming_url;
+  }
+  session.tinyfish.status = detail;
+  syncSession(session);
+}
+
+async function captureSceneGrounding(session: SceneSession) {
+  try {
+    const grounding = await readBlenderSceneGrounding();
+    if (!grounding) {
+      addCheckpoint(session, "scene_grounded", "warning", "Live Blender grounding is unavailable on the current bridge transport.");
+      return;
+    }
+
+    session.grounding = grounding;
+    session.narrative.operator_brief = [
+      `Grounded scene: ${grounding.scene_name}`,
+      `Frame ${grounding.current_frame}/${grounding.frame_end}, ${grounding.object_count} objects`,
+      `Bridge mode: ${session.blender.bridge_mode}`,
+      "Codex will use this grounding to constrain the TinyFish extraction and the Blender apply plan.",
+    ];
+    session.narrative.next_best_move = "Launch or continue the research pass so Codex can convert the grounded scene into a SceneSpec and workflow skills.";
+    addCheckpoint(session, "scene_grounded", "ready", grounding.summary_lines[0] ?? "Live Blender scene info captured.");
+    saveSession(session);
+  } catch (error) {
+    addCheckpoint(session, "scene_grounded", "warning", `Scene grounding failed: ${String(error)}`);
+    saveSession(session);
+  }
+}
+
+function validateSceneSpec(sceneSpec: SceneSpec): SceneValidationIssue[] {
+  const issues: SceneValidationIssue[] = [];
+  const names = new Map<string, string>();
+  const vagueTokens = ["thing", "stuff", "object", "item", "cool"];
+
+  for (const object of sceneSpec.objects) {
+    const normalized = slugify(object.name);
+    if (names.has(normalized)) {
+      issues.push({
+        id: `${sceneSpec.scene_id}-dup-${normalized}`,
+        severity: "warning",
+        code: "duplicate_object",
+        message: `Duplicate object naming detected for "${object.name}".`,
+        suggested_fix: "Merge or rename repeated props so Blender actions stay deterministic.",
+        node_ids: [object.id, names.get(normalized)!],
+        blocking: false,
+      });
+    } else {
+      names.set(normalized, object.id);
+    }
+
+    if (object.importance >= 4 && object.citations.length === 0) {
+      issues.push({
+        id: `${sceneSpec.scene_id}-${object.id}-evidence`,
+        severity: "error",
+        code: "missing_citation",
+        message: `Hero scene element "${object.name}" is missing evidence.`,
+        suggested_fix: "Re-run research or attach at least one grounded citation before live Blender apply.",
+        node_ids: [object.id],
+        blocking: true,
+      });
+    }
+
+    if (vagueTokens.some((token) => normalized.includes(token))) {
+      issues.push({
+        id: `${sceneSpec.scene_id}-${object.id}-vague`,
+        severity: "warning",
+        code: "vague_object",
+        message: `Scene element "${object.name}" is too vague for deterministic blocking.`,
+        suggested_fix: "Replace it with a concrete prop or move it into NOTES as an unresolved placeholder.",
+        node_ids: [object.id],
+        blocking: false,
+      });
     }
   }
 
-  const meanEvalScore =
-    skills.reduce((sum, skill) => sum + skill.eval_score, 0) / Math.max(skills.length, 1);
+  if (!sceneSpec.camera.framing_notes.trim()) {
+    issues.push({
+      id: `${sceneSpec.scene_id}-camera-framing`,
+      severity: "error",
+      code: "missing_camera_framing",
+      message: "Camera framing notes are empty.",
+      suggested_fix: "Give Codex at least one hero framing instruction before applying to Blender.",
+      node_ids: [`${sceneSpec.scene_id}-camera`],
+      blocking: true,
+    });
+  }
 
-  return {
-    total_skills: skills.length,
-    active_skills: skills.filter((skill) => skill.status === "active").length,
-    total_runs: skills.reduce((sum, skill) => sum + skill.usage_count, 0),
-    patched_this_week: skills.filter((skill) => skill.last_patched_at).length,
-    mean_eval_score: Number(meanEvalScore.toFixed(2)),
-    top_tags: [...tagCounts.entries()]
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 5)
-      .map(([tag, count]) => ({ tag, count })),
-  };
+  if (!sceneSpec.lighting.overall_feel.trim()) {
+    issues.push({
+      id: `${sceneSpec.scene_id}-lighting-feel`,
+      severity: "warning",
+      code: "weak_lighting_direction",
+      message: "Lighting direction is underspecified.",
+      suggested_fix: "Add the emotional intent of the light so the rig reads clearly in previs.",
+      node_ids: [`${sceneSpec.scene_id}-lighting`],
+      blocking: false,
+    });
+  }
+
+  return issues;
 }
 
-export function discoverSources(input: DiscoverSourcesInput) {
-  const tokens = titleTokens(input.topic);
+function applyInstructionToScene(session: SceneSession, instruction: string, targetNodeIds: string[]) {
+  if (!session.scene_spec) {
+    return;
+  }
 
-  const filtered = seedSources
-    .filter((source) => {
-      if (input.sourceKinds?.length && !input.sourceKinds.includes(source.kind)) {
-        return false;
+  const lower = instruction.toLowerCase();
+  const spec = session.scene_spec;
+
+  if (lower.includes("dream")) {
+    spec.style_keywords = [...new Set([...spec.style_keywords, "dreamlike", "misty"])];
+    spec.lighting.overall_feel = "dreamlike silver-blue haze with softened edges";
+  }
+  if (lower.includes("dramatic")) {
+    spec.camera.framing_notes = `${spec.camera.framing_notes} Push contrast in silhouette and isolate the hero object with stronger negative space.`;
+    spec.lighting.rim_light = "pronounced edge light from the rain-streaked window";
+  }
+  if (lower.includes("documentary")) {
+    spec.camera.lens_feel = "28mm documentary realism with handheld tension";
+  }
+
+  const targetObjects = spec.objects.filter((object) => targetNodeIds.includes(object.id));
+  if (targetObjects.length) {
+    for (const object of targetObjects) {
+      object.description = `${object.description} Refined by Codex cluster instruction: ${instruction}`;
+      object.confidence = Math.min(1, object.confidence + 0.06);
+      if (object.citations.length === 0) {
+        object.citations = spec.citations.slice(0, 1);
       }
-      return true;
-    })
-    .map((source) => {
-      const haystack = `${source.title} ${source.reason} ${source.url}`.toLowerCase();
-      const matches = tokens.filter((token) => haystack.includes(token)).length;
-      const boost = source.requiresBrowser && input.preferLiveBrowser ? 1 : 0;
-      return { source, score: matches + boost };
-    })
-    .sort((left, right) => right.score - left.score);
+    }
+  } else {
+    spec.objects.push({
+      id: `${session.scene_id}-note-${spec.objects.length + 1}`,
+      name: "Codex direction note",
+      category: "note",
+      description: instruction,
+      material: "annotation",
+      color: "signal amber",
+      approx_size: "text marker",
+      placement_hint: "NOTES collection near the selected cluster",
+      importance: 2,
+      confidence: 0.74,
+      citations: spec.citations.slice(0, 1),
+    });
+  }
 
-  const sources = (filtered.some((entry) => entry.score > 0) ? filtered : filtered.slice(0, 4))
-    .map((entry) => entry.source)
-    .slice(0, 5);
-
-  return {
-    sources,
-    escalatedToTinyFish: sources.some((source) => source.requiresBrowser),
-    rationale:
-      "Radar starts with public, cheap sources first and only marks a browser pass when the page is dynamic, JS-heavy, or demo-critical.",
-  };
+  spec.composition_rules = [...new Set([...spec.composition_rules, `Codex merge: ${instruction}`])].slice(-6);
+  session.scene_spec = sceneSpecSchema.parse(spec);
+  refreshDerivedArtifacts(session);
 }
 
-export function scanSources(sourceUrls: string[]) {
-  const scans = sourceUrls.map(inferScan);
+async function simulateTinyFishRun(session: SceneSession): Promise<SceneSpec> {
+  const simulatedRunId = `sim-${randomUUID().slice(0, 10)}`;
+  session.tinyfish.run_id = simulatedRunId;
+  session.tinyfish.live = false;
+  addTinyFishEvent(session, "started", "TinyFish started", "Simulated run-sse launch for local preview.", { run_id: simulatedRunId });
+  addCheckpoint(session, "run_created", "ready", "Codex prepared a run-sse request using the curated TinyFish capability profile.");
+  await sleep(350);
 
-  return {
-    scans,
-    blocked: scans.some((scan) => scan.blocked),
-    next_step:
-      scans.some((scan) => scan.recommended_path === "tinyfish")
-        ? "Run TinyFish on the interactive sources and keep the rest on fetch."
-        : "Stay on cheap parsing and move to workflow normalization.",
-  };
+  addTinyFishEvent(session, "streaming_url", "Browser stream ready", "Demo stream prepared so the graph can animate like a live session.", {
+    run_id: simulatedRunId,
+    streaming_url: `https://observe.tinyfish.ai/session/${simulatedRunId}`,
+  });
+  await sleep(350);
+
+  addTinyFishEvent(session, "progress", "Page identity verified", "Confirmed the primary source and opened the research surface.");
+  addCheckpoint(session, "page_identity_verified", "ready", "Primary source identity and page intent were verified before extraction.");
+  await sleep(320);
+
+  addTinyFishEvent(session, "progress", "Research extracted", "TinyFish is extracting scene-relevant details with citations only.");
+  addCheckpoint(session, "research_extracted", "ready", "Scene-relevant evidence was extracted conservatively from the live web.");
+  await sleep(320);
+
+  const spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+  addTinyFishEvent(session, "complete", "TinyFish complete", "Structured scene metadata is ready for Codex normalization.", {
+    run_id: simulatedRunId,
+  });
+  return spec;
 }
 
-export function extractWorkflow(input: ExtractWorkflowInput): WorkflowSpec {
-  const sourceKind = uniq(input.sourceUrls.map(inferSourceKind));
-  const tags = makeTags(input.title, input.description);
-  const surfaceSuggestion =
-    input.desiredSurface ??
-    (tags.includes("menu-bar") ? "menu-bar" : tags.includes("widget") ? "widget" : "widget");
-  const category = tags.includes("browser-automation") ? "Browser Automation" : "Documentation";
-
-  return {
-    workflow_id: slugify(input.title),
-    title: input.title,
-    description:
-      input.description ??
-      "Normalize a public workflow, retrieve the nearest existing skills, and compile the best reusable surface.",
-    category,
-    tags,
-    source_urls: input.sourceUrls,
-    source_kind: sourceKind,
-    input_schema: [
-      {
-        name: "source_topic",
-        type: "string",
-        required: true,
-        description: "Plain-language description of the public workflow to capture.",
-      },
-      {
-        name: "source_urls",
-        type: "string[]",
-        required: true,
-        description: "Public URLs that contain the repeatable steps or evidence.",
-      },
-    ],
-    output_schema: {
-      type: "object",
-      properties: {
-        decision: { type: "string" },
-        reasoning: { type: "array" },
-        generated_skill: { type: "object" },
-      },
-      required: ["decision", "reasoning"],
-    },
-    steps: [
-      {
-        id: "s1",
-        action: "discover",
-        instruction: "Check public repos and docs first, then escalate only the dynamic pages to TinyFish.",
-        expected_output: "ranked evidence plan",
-      },
-      {
-        id: "s2",
-        action: "normalize",
-        instruction: "Turn the messy instructions into a structured workflow JSON spec.",
-        expected_output: "workflow_spec.json",
-      },
-      {
-        id: "s3",
-        action: "retrieve",
-        instruction: "Search the skill bank for the closest reusable skills before creating anything new.",
-        expected_output: "compiler decision",
-      },
-      {
-        id: "s4",
-        action: "surface",
-        instruction: "Compile the chosen skill into a widget or chat surface with telemetry hooks.",
-        expected_output: "skill scaffold and surface plan",
-      },
-    ],
-    evidence: input.sourceUrls.slice(0, 3).map((url) => ({
-      url,
-      snippet: `Public evidence captured from ${new URL(url).hostname}.`,
-    })),
-    surface_suggestion: surfaceSuggestion,
-    mcp_tools_needed: ["discover_sources", "extract_workflow", "compile_skill", "render_registry_dashboard"],
-    confidence: sourceKind.includes("docs") || sourceKind.includes("github") ? 0.91 : 0.76,
-  };
+function tinyFishGoalForSession(session: SceneSession): string {
+  const groundingLines = groundingBriefLines(session.grounding).map((line) => `- ${line}`).join(" ");
+  return [
+    "Research only what is useful for a Blender previs scene.",
+    `Topic: ${session.goal}`,
+    `Current Blender scene grounding: ${groundingLines}`,
+    "Find public references that help block out environment, props, camera, and lighting. Ignore anything that only helps final polish.",
+    "Return strict JSON only. No markdown. No prose outside the JSON object.",
+    `Use this exact JSON shape: ${tinyFishSceneSpecTemplate()}`,
+    "Be conservative. Lower confidence when uncertain, prefer notes over fabricated assets, and keep the output editable inside Blender.",
+  ].join(" ");
 }
 
-export function findSimilarSkills(input: FindSkillsInput) {
-  const nearest_skills = computeSkillMatches(input);
-  return {
-    nearest_skills,
-    recommended_decision: decideStrategy(nearest_skills),
-  };
-}
-
-export function compileSkill(input: CompileSkillInput): RunPayload & {
-  decision: CompilerDecision;
-  skill: SkillRecord;
-  generated_files: string[];
-} {
-  const decision = buildDecision(
+async function liveTinyFishRun(session: SceneSession): Promise<SceneSpec> {
+  const primarySource = session.available_sources[0];
+  const liveResult = await streamTinyFishRun(
     {
-      category: input.workflowSpec.category,
-      tags: input.workflowSpec.tags,
-      workflowTitle: input.workflowSpec.title,
+      url: primarySource.url,
+      goal: tinyFishGoalForSession(session),
+      browserProfile: session.tinyfish.browser_profile as Extract<BrowserMode, "lite" | "stealth">,
     },
-    input.preferredStrategy,
+    (raw: TinyFishRawEvent) => {
+      const normalized = normalizeTinyFishEvent(raw);
+      session.tinyfish.run_id = raw.run_id ?? session.tinyfish.run_id;
+      session.tinyfish.live = true;
+      session.tinyfish.streaming_url = raw.streaming_url ?? session.tinyfish.streaming_url;
+      session.tinyfish.events = [...session.tinyfish.events, normalized].slice(-18);
+      session.tinyfish.status = normalized.detail;
+      if (normalized.type === "started") {
+        addCheckpoint(session, "run_created", "ready", "TinyFish accepted the live run-sse request.");
+      }
+      if (normalized.type === "progress" && /page|navigating|loaded/i.test(normalized.detail)) {
+        addCheckpoint(session, "page_identity_verified", "ready", "TinyFish verified the live page before deeper extraction.");
+      }
+      syncSession(session);
+    },
   );
 
-  const name = input.workflowSpec.title.replace(/\s+/g, " ").trim();
-  const skillId = slugify(name);
-  const forkTarget = decision.forked_from ? getSkill(decision.forked_from) : undefined;
+  return normalizeSceneSpec(liveResult.result, session);
+}
 
-  const skill: SkillRecord = {
-    skill_id: skillId,
-    name,
-    description: input.workflowSpec.description,
-    category: input.workflowSpec.category,
-    tags: input.workflowSpec.tags,
-    version: "0.1.0",
-    status: "draft",
-    forked_from: forkTarget?.skill_id ?? null,
-    composed_from: decision.composed_from,
-    source_urls: input.workflowSpec.source_urls,
-    source_hashes: input.workflowSpec.source_urls.map((_, index) => `${skillId}-${index + 1}`),
-    surface_type: input.workflowSpec.surface_suggestion,
-    usage_count: 0,
-    last_used_at: new Date().toISOString(),
-    last_scanned_at: new Date().toISOString(),
-    last_patched_at: null,
-    eval_score: 0.0,
-  };
+async function hydrateResearch(sceneId: string) {
+  const session = sessions.get(sceneId);
+  if (!session) {
+    return;
+  }
 
-  const generated_files = [
-    "SKILL.md",
-    "agents/openai.yaml",
-    "evals/trigger.json",
-    "evals/schema.json",
-    "CHANGELOG.md",
+  try {
+    session.phase = "researching";
+    session.subtitle = "Codex is grounding the live Blender scene before launching the web research run.";
+    session.tinyfish.status = "Reading the current Blender scene so the research pass starts from reality.";
+    saveSession(session);
+
+    await captureSceneGrounding(session);
+
+    session.subtitle = "Codex is using scene grounding plus TinyFish to shape the live research run.";
+    session.tinyfish.status = tinyFishConfigured()
+      ? "Launching live TinyFish run-sse request with the grounded scene context."
+      : "API key missing, so the local preview is simulating the live run-sse flow from the grounded scene context.";
+    saveSession(session);
+
+    const sceneSpec = tinyFishConfigured() ? await liveTinyFishRun(session) : await simulateTinyFishRun(session);
+
+    session.phase = "normalizing";
+    session.tinyfish.status = "Codex is normalizing research into a scene spec and Blender command plan.";
+    addCheckpoint(session, "scene_spec_normalized", "running", "Normalizing citations, object roles, and cinematic framing.");
+    saveSession(session);
+    await sleep(220);
+
+    session.scene_spec = sceneSpec;
+    refreshDerivedArtifacts(session);
+    session.blender.summary = blenderBridgeConfigured()
+      ? "Command plan is ready for live Blender application."
+      : "Command plan is ready. Live bridge is optional; fallback export is standing by.";
+    addCheckpoint(session, "scene_spec_normalized", "ready", "Scene spec was normalized into a deterministic, evidence-backed structure.");
+    addCheckpoint(session, "scene_graph_resolved", "ready", "The graph resolved hero objects, cameras, lighting, and validation targets.");
+    addCheckpoint(session, "blender_plan_ready", "ready", "Codex translated the scene graph into deterministic Blender actions.");
+    session.phase = "ready";
+    session.subtitle = "Scene graph resolved. Validate, repair, or apply to Blender from the same Codex surface.";
+    session.narrative.next_best_move = "Inspect the generated workflow skills, validate the scene, then apply or replay Blender actions.";
+    saveSession(session);
+
+    validateSceneGraphInternal(sceneId);
+  } catch (error) {
+    session.phase = "error";
+    addTinyFishEvent(session, "error", "TinyFish error", String(error));
+    addCheckpoint(session, "repair_needed", "error", "Research failed. Codex recommends a repair pass or source swap.");
+    session.validation.status = "failed";
+    session.validation.summary = "Research failed before a valid scene spec could be produced.";
+    session.subtitle = "The run hit an error. Use repair to retry or tighten the instruction.";
+    saveSession(session);
+  } finally {
+    jobs.delete(sceneId);
+  }
+}
+
+function validateSceneGraphInternal(sceneId: string) {
+  const session = sessions.get(sceneId);
+  if (!session || !session.scene_spec) {
+    return;
+  }
+
+  session.phase = "validating";
+  session.validation.issues = validateSceneSpec(session.scene_spec);
+  const blocking = session.validation.issues.some((issue) => issue.blocking);
+  session.validation.status = blocking ? "failed" : "passed";
+  session.validation.summary = blocking
+    ? "Validation found blocking issues that need repair before a confident Blender apply."
+    : "Validation passed. Remaining uncertainty is contained in notes and placeholders.";
+  session.narrative.next_best_move = blocking
+    ? "Run a repair pass or refine one of the generated workflow skills before applying to Blender."
+    : "Validation is clear. Apply the scene to Blender live or replay only failed actions.";
+  addCheckpoint(
+    session,
+    blocking ? "repair_needed" : "verification_passed",
+    blocking ? "warning" : "ready",
+    session.validation.summary,
+  );
+  session.phase = "ready";
+  saveSession(session);
+}
+
+async function hydrateBlenderApply(sceneId: string, replayFailedOnly = false) {
+  const session = sessions.get(sceneId);
+  if (!session || !session.scene_spec) {
+    jobs.delete(sceneId);
+    return;
+  }
+
+  try {
+    const actions = replayFailedOnly
+      ? session.blender.command_plan.actions.filter((action) => action.status === "failed")
+      : session.blender.command_plan.actions;
+
+    if (!actions.length) {
+      session.blender.summary = "No Blender actions needed replay right now.";
+      session.phase = "ready";
+      saveSession(session);
+      jobs.delete(sceneId);
+      return;
+    }
+
+    session.phase = "applying";
+    session.blender.status = "applying";
+    session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
+      ...action,
+      status: actions.some((candidate) => candidate.id === action.id) ? "running" : action.status,
+    }));
+    saveSession(session);
+
+    await sleep(220);
+    const result = await applyBlenderPlan(session.scene_spec, actions);
+    session.blender.bridge_mode = result.bridgeMode;
+    session.blender.summary = result.summary;
+    session.blender.status = result.bridgeMode === "live" ? "applied" : "fallback_ready";
+    session.blender.last_applied_at = new Date().toISOString();
+    session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
+      ...action,
+      status: result.statuses.get(action.id) ?? action.status,
+    }));
+
+    addCheckpoint(
+      session,
+      "blender_applied",
+      session.blender.command_plan.actions.some((action) => action.status === "failed") ? "warning" : "ready",
+      session.blender.summary,
+    );
+    session.phase = result.bridgeMode === "live" ? "completed" : "ready";
+    session.subtitle =
+      result.bridgeMode === "live"
+        ? "Blender scene updated live from the Codex orchestration graph."
+        : "Live bridge unavailable, but the fallback command plan and export bundle are ready.";
+    session.narrative.next_best_move =
+      result.bridgeMode === "live"
+        ? "Inspect the updated scene in Blender, then use a workflow skill prompt to refine cameras, lighting, or props."
+        : "Keep the generated workflow skills, or use the export bundle while the live Blender bridge is unavailable.";
+    saveSession(session);
+  } catch (error) {
+    session.blender.status = "failed";
+    session.blender.summary = String(error);
+    session.blender.command_plan.actions = session.blender.command_plan.actions.map((action) => ({
+      ...action,
+      status: action.status === "running" ? "failed" : action.status,
+    }));
+    session.phase = "error";
+    session.subtitle = "Blender apply failed. Replay the failed actions or fall back to export.";
+    addCheckpoint(session, "blender_applied", "error", "Blender bridge failed during the apply step.");
+    saveSession(session);
+  } finally {
+    jobs.delete(sceneId);
+  }
+}
+
+async function hydrateRepair(sceneId: string, input: RepairSceneRunInput) {
+  const session = sessions.get(sceneId);
+  if (!session) {
+    jobs.delete(sceneId);
+    return;
+  }
+
+  try {
+    await sleep(260);
+    if (input.preferStealth) {
+      session.tinyfish.browser_profile = "stealth";
+      session.tinyfish.docs_reasoning = [
+        "Repair pass escalated from lite to stealth because the operator explicitly requested a safer browser profile.",
+        ...session.tinyfish.docs_reasoning,
+      ].slice(0, 4);
+    }
+    if (!session.scene_spec) {
+      session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+      refreshDerivedArtifacts(session);
+    }
+
+    if (input.instruction?.trim()) {
+      applyInstructionToScene(session, input.instruction.trim(), input.targetNodeIds ?? []);
+      addTinyFishEvent(
+        session,
+        "checkpoint",
+        "Repair note merged",
+        `Codex merged the cluster instruction into the scene graph: ${input.instruction.trim()}`,
+      );
+    } else {
+      session.scene_spec = buildHeuristicSceneSpec(session.goal, session.available_sources, session.scene_id);
+      refreshDerivedArtifacts(session);
+      addTinyFishEvent(
+        session,
+        "checkpoint",
+        "Repair rerun staged",
+        "Codex rebuilt the scene spec conservatively from the existing evidence.",
+      );
+    }
+
+    addCheckpoint(session, "scene_spec_normalized", "ready", "Repair pass normalized the scene graph with tighter instructions.");
+    session.phase = "ready";
+    session.subtitle = "Repair pass complete. Validate again or replay Blender from the updated graph.";
+    session.narrative.next_best_move = "Validate the repaired scene, then copy a workflow skill prompt or replay Blender actions.";
+    saveSession(session);
+    validateSceneGraphInternal(sceneId);
+  } catch (error) {
+    session.phase = "error";
+    session.subtitle = "Repair failed. Tighten the instruction or restart research.";
+    addTinyFishEvent(session, "error", "Repair failed", String(error));
+    saveSession(session);
+  } finally {
+    jobs.delete(sceneId);
+  }
+}
+
+export function startSceneResearch(input: StartSceneResearchInput): SceneSession {
+  const session = createEmptySession(input.goal);
+  session.available_sources = rankSources(input.goal, input.sourceUrl);
+  session.tinyfish.browser_profile =
+    input.browserProfile ?? (session.available_sources[0]?.recommended_browser_mode === "stealth" ? "stealth" : "lite");
+  session.phase = "researching";
+  session.subtitle = "Codex is staging the scene-grounding pass before the TinyFish research lane lights up.";
+  session.tinyfish.status = tinyFishConfigured()
+    ? "Preparing a grounded TinyFish run-sse request."
+    : "Preparing the simulated grounded run-sse flow because no API key is configured.";
+  session.narrative.operator_brief = [
+    `Primary source: ${session.available_sources[0]?.title ?? "manual input"}`,
+    `Browser profile: ${session.tinyfish.browser_profile}`,
+    "Codex will read Blender first, then keep the graph live while TinyFish researches and Blender stays downstream.",
   ];
+  session.narrative.next_best_move = "Capture the live Blender scene, then let TinyFish research against that grounded context.";
+  saveSession(session);
 
-  return {
-    view: "run",
-    title: `Compiled ${name}`,
-    subtitle: `${decision.decision.toUpperCase()} route selected for ${input.workflowSpec.surface_suggestion} delivery.`,
-    outcome: {
-      verdict:
-        decision.decision === "fork"
-          ? `Fork ${decision.forked_from} into a Radar-specific branch.`
-          : `${decision.decision[0].toUpperCase()}${decision.decision.slice(1)} a fresh skill record.`,
-      rationale: [
-        decision.reason,
-        "The generated skill stays public-source-friendly and keeps TinyFish reserved for the hard pages.",
-        `Surface preset: ${surfacePresets.find((surface) => surface.surface_type === input.workflowSpec.surface_suggestion)?.display_name ?? "Radar Surface"}.`,
-      ],
-      next_step: "Generate SKILL.md, wire evals, and expose the render tool in the demo surface.",
-    },
-    citations: input.workflowSpec.source_urls.slice(0, 3).map((url) => ({
-      label: new URL(url).hostname,
-      url,
-    })),
-    decision,
-    generated_files,
-    skill,
-  };
+  const job = hydrateResearch(session.scene_id);
+  jobs.set(session.scene_id, job);
+
+  return clone(session);
 }
 
-export function patchSkill(input: PatchSkillInput): RunPayload {
-  const skill = getSkill(input.skillId);
-  const changedSources = (input.changedSources?.length ? input.changedSources : skill.source_urls).slice(0, 2);
-  const patch: PatchJob = {
-    patch_id: `patch-${slugify(skill.skill_id)}-${changedSources.length}`,
-    skill_id: skill.skill_id,
-    previous_version: skill.version,
-    proposed_version: bumpPatch(skill.version),
-    change_type: "patch",
-    source_changed: true,
-    changed_sources: changedSources,
-    summary: input.reason,
-    auto_promote: false,
-    eval_required: true,
-    approved: false,
-  };
-
-  return {
-    view: "run",
-    title: `Patch proposal for ${skill.name}`,
-    subtitle: "Source drift detected. Radar is holding the patch behind an eval gate.",
-    outcome: {
-      verdict: `Open ${patch.change_type} job ${patch.patch_id}.`,
-      rationale: [
-        "The public source changed, but the patch still needs an eval pass before promotion.",
-        "TinyFish can re-run only the affected interactive sources instead of the whole workflow.",
-      ],
-      next_step: "Run the patch evals, inspect the evidence diff, and approve promotion if the contract still holds.",
-    },
-    citations: changedSources.map((url) => ({
-      label: new URL(url).hostname,
-      url,
-    })),
-    patch,
-  };
+export function renderSceneGraph(sceneId?: string): SceneSession {
+  const session = getSession(sceneId);
+  return clone(session);
 }
 
-export function listSkills(input: ListSkillsInput = {}) {
-  const skills = seedSkills.filter((skill) => {
-    if (input.category && skill.category !== input.category) return false;
-    if (input.tag && !skill.tags.includes(input.tag)) return false;
-    if (input.status && skill.status !== input.status) return false;
-    return true;
-  });
-
-  return { skills };
+export function validateSceneGraph(input: ValidateSceneGraphInput): SceneSession {
+  const session = getSession(input.sceneId);
+  validateSceneGraphInternal(session.scene_id);
+  return clone(getSession(session.scene_id));
 }
 
-export function skillUsageStats() {
-  return statsFromSkills(seedSkills);
+export function applySceneToBlender(input: ApplySceneToBlenderInput): SceneSession {
+  const session = getSession(input.sceneId);
+  const job = hydrateBlenderApply(session.scene_id, input.replayFailedOnly);
+  jobs.set(session.scene_id, job);
+  return clone(getSession(session.scene_id));
 }
 
-export function renderRegistryDashboard(focusCategory?: string): DashboardPayload {
-  const visibleSkills = focusCategory
-    ? seedSkills.filter((skill) => skill.category === focusCategory)
-    : seedSkills;
-  const usage = statsFromSkills(visibleSkills);
+export function repairSceneRun(input: RepairSceneRunInput): SceneSession {
+  const session = getSession(input.sceneId);
+  session.phase = "repairing";
+  session.subtitle = "Repair pass started. Codex is tightening the scene graph before the next Blender move.";
+  addCheckpoint(session, "repair_needed", "running", "Repair pass is active.");
+  saveSession(session);
 
-  return {
-    view: "dashboard",
-    title: "Radar Registry",
-    subtitle: productLine,
-    stats: [
-      {
-        label: "Active skills",
-        value: `${usage.active_skills}`,
-        detail: "Live entries ready to route or fork.",
-      },
-      {
-        label: "Total runs",
-        value: `${usage.total_runs}`,
-        detail: "Usage is a ranking prior, not vanity.",
-      },
-      {
-        label: "Mean eval",
-        value: usage.mean_eval_score.toFixed(2),
-        detail: "Compiler quality gate across the seed bank.",
-      },
-      {
-        label: "Patched this week",
-        value: `${usage.patched_this_week}`,
-        detail: "Signals that the catalog is alive, not static.",
-      },
-    ],
-    pipeline,
-    skills: visibleSkills,
-    watchlist: [
-      {
-        title: "Cheap parse first",
-        status: "healthy",
-        detail: "Three seeded sources stay on fetch and skip the browser entirely.",
-      },
-      {
-        title: "TinyFish escalation",
-        status: "ready",
-        detail: "Interactive demo surfaces are marked for live browser runs only when needed.",
-      },
-      {
-        title: "Patch loop",
-        status: "queued",
-        detail: "One changelog-driven patch path is seeded and eval-gated.",
-      },
-    ],
-    quick_actions: ["Render skill card", "Compile demo skill", "Propose patch"],
-  };
-}
-
-export function renderSkillCard(skillId?: string): SkillPayload {
-  const skill = getSkill(skillId);
-
-  return {
-    view: "skill",
-    title: skill.name,
-    subtitle: skill.description,
-    skill,
-    sources: skill.source_urls.map((url) => ({
-      url,
-      note: inferScan(url).note,
-    })),
-    evals: seedEvals.filter((result) => result.skill_id === skill.skill_id),
-    quick_actions: ["Fork skill", "Open evidence", "Patch on drift"],
-  };
-}
-
-export function renderRunResult(query: string, skillId?: string): RunPayload {
-  const skill = getSkill(skillId);
-
-  return {
-    view: "run",
-    title: "Simulated run result",
-    subtitle: `Query: ${query}`,
-    outcome: {
-      verdict: `Route this request through ${skill.name}.`,
-      rationale: [
-        `${skill.name} already covers the strongest capability cluster for this prompt.`,
-        "The run cites public evidence, keeps the output compact, and preserves a clean path to a widget surface.",
-      ],
-      next_step: "Use compile_skill if the current surface needs a dedicated fork.",
-    },
-    citations: skill.source_urls.slice(0, 2).map((url) => ({
-      label: new URL(url).hostname,
-      url,
-    })),
-  };
-}
-
-export function renderPreviewPayload(kind: "dashboard" | "skill" | "run", options?: Record<string, string | undefined>): RadarPayload {
-  if (kind === "skill") {
-    return renderSkillCard(options?.skillId);
-  }
-  if (kind === "run") {
-    return renderRunResult(options?.query ?? "Compile a docs workflow into a widget-ready skill.", options?.skillId);
-  }
-  return renderRegistryDashboard(options?.category);
+  const job = hydrateRepair(session.scene_id, input);
+  jobs.set(session.scene_id, job);
+  return clone(getSession(session.scene_id));
 }

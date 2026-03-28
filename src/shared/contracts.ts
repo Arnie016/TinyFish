@@ -1,214 +1,318 @@
 import { z } from "zod";
 
-export const sourceKindSchema = z.enum(["docs", "github", "product", "changelog", "demo"]);
+export const sourceKindSchema = z.enum(["docs", "api", "community", "moodboard", "manual"]);
 export type SourceKind = z.infer<typeof sourceKindSchema>;
 
 export const browserModeSchema = z.enum(["none", "lite", "stealth"]);
 export type BrowserMode = z.infer<typeof browserModeSchema>;
 
-export const surfaceTypeSchema = z.enum(["chat", "widget", "menu-bar", "desktop", "mcp"]);
-export type SurfaceType = z.infer<typeof surfaceTypeSchema>;
+export const scenePhaseSchema = z.enum([
+  "idle",
+  "researching",
+  "normalizing",
+  "ready",
+  "validating",
+  "repairing",
+  "applying",
+  "completed",
+  "error",
+]);
+export type ScenePhase = z.infer<typeof scenePhaseSchema>;
+
+export const sceneNodeTypeSchema = z.enum([
+  "research_source",
+  "scene_grounding",
+  "tinyfish_run",
+  "scene_checkpoint",
+  "scene_object",
+  "camera",
+  "lighting",
+  "workflow_skill",
+  "blender_action",
+  "validation_issue",
+]);
+export type SceneNodeType = z.infer<typeof sceneNodeTypeSchema>;
+
+export const sceneNodeStatusSchema = z.enum(["idle", "queued", "running", "ready", "warning", "error", "blocked"]);
+export type SceneNodeStatus = z.infer<typeof sceneNodeStatusSchema>;
+
+export const sceneObjectCategorySchema = z.enum(["prop", "setpiece", "character", "vehicle", "fx", "note"]);
+export type SceneObjectCategory = z.infer<typeof sceneObjectCategorySchema>;
+
+export const checkpointKindSchema = z.enum([
+  "scene_grounded",
+  "run_created",
+  "page_identity_verified",
+  "research_extracted",
+  "scene_spec_normalized",
+  "scene_graph_resolved",
+  "blender_plan_ready",
+  "blender_applied",
+  "verification_passed",
+  "repair_needed",
+]);
+export type CheckpointKind = z.infer<typeof checkpointKindSchema>;
+
+export const validationSeveritySchema = z.enum(["info", "warning", "error"]);
+export type ValidationSeverity = z.infer<typeof validationSeveritySchema>;
+
+export const validationStatusSchema = z.enum(["pending", "passed", "failed"]);
+export type ValidationStatus = z.infer<typeof validationStatusSchema>;
+
+export const blenderBridgeModeSchema = z.enum(["live", "fallback", "unavailable"]);
+export type BlenderBridgeMode = z.infer<typeof blenderBridgeModeSchema>;
+
+export const blenderRunStatusSchema = z.enum(["idle", "queued", "applying", "applied", "failed", "fallback_ready"]);
+export type BlenderRunStatus = z.infer<typeof blenderRunStatusSchema>;
+
+export const blenderActionKindSchema = z.enum(["collection", "mesh", "camera", "light", "annotation", "material"]);
+export type BlenderActionKind = z.infer<typeof blenderActionKindSchema>;
+
+export const blenderActionStatusSchema = z.enum(["pending", "running", "done", "failed", "blocked"]);
+export type BlenderActionStatus = z.infer<typeof blenderActionStatusSchema>;
+
+export const tinyFishEventTypeSchema = z.enum(["started", "streaming_url", "progress", "checkpoint", "complete", "error"]);
+export type TinyFishEventType = z.infer<typeof tinyFishEventTypeSchema>;
 
 export const sourceCandidateSchema = z.object({
   id: z.string(),
   title: z.string(),
   url: z.url(),
   kind: sourceKindSchema,
-  requiresBrowser: z.boolean(),
-  browserMode: browserModeSchema,
+  requires_browser: z.boolean(),
+  recommended_browser_mode: browserModeSchema,
   reason: z.string(),
 });
 export type SourceCandidate = z.infer<typeof sourceCandidateSchema>;
 
-export const sourceScanSchema = z.object({
-  url: z.url(),
-  source_kind: sourceKindSchema,
-  recommended_path: z.enum(["fetch", "tinyfish"]),
-  browser_mode: browserModeSchema,
-  blocked: z.boolean(),
-  note: z.string(),
-});
-export type SourceScan = z.infer<typeof sourceScanSchema>;
-
-export const workflowStepSchema = z.object({
+export const sceneEvidenceSchema = z.object({
   id: z.string(),
-  action: z.string(),
-  instruction: z.string(),
-  expected_output: z.string(),
+  label: z.string(),
+  url: z.url(),
+  snippet: z.string(),
+  source_kind: sourceKindSchema,
 });
-export type WorkflowStep = z.infer<typeof workflowStepSchema>;
+export type SceneEvidence = z.infer<typeof sceneEvidenceSchema>;
 
-export const workflowFieldSchema = z.object({
+export const sceneObjectSchema = z.object({
+  id: z.string(),
   name: z.string(),
-  type: z.string(),
-  required: z.boolean(),
+  category: sceneObjectCategorySchema,
   description: z.string(),
+  material: z.string(),
+  color: z.string(),
+  approx_size: z.string(),
+  placement_hint: z.string(),
+  importance: z.number().min(1).max(5),
+  confidence: z.number().min(0).max(1),
+  citations: z.array(sceneEvidenceSchema),
 });
-export type WorkflowField = z.infer<typeof workflowFieldSchema>;
+export type SceneObject = z.infer<typeof sceneObjectSchema>;
 
-export const workflowSpecSchema = z.object({
-  workflow_id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  category: z.string(),
-  tags: z.array(z.string()),
-  source_urls: z.array(z.url()),
-  source_kind: z.array(sourceKindSchema),
-  input_schema: z.array(workflowFieldSchema),
-  output_schema: z.object({
-    type: z.literal("object"),
-    properties: z.record(z.string(), z.object({ type: z.string() }).passthrough()),
-    required: z.array(z.string()),
+export const sceneSpecSchema = z.object({
+  scene_id: z.string(),
+  project_title: z.string(),
+  topic: z.string(),
+  scene_goal: z.string(),
+  style_keywords: z.array(z.string()),
+  environment: z.object({
+    location_type: z.string(),
+    time_of_day: z.string(),
+    weather: z.string(),
+    mood: z.string(),
+    scale: z.string(),
   }),
-  steps: z.array(workflowStepSchema),
-  evidence: z.array(
+  objects: z.array(sceneObjectSchema),
+  camera: z.object({
+    shot_type: z.string(),
+    lens_feel: z.string(),
+    framing_notes: z.string(),
+  }),
+  lighting: z.object({
+    key_light: z.string(),
+    fill_light: z.string(),
+    rim_light: z.string(),
+    practicals: z.array(z.string()),
+    overall_feel: z.string(),
+  }),
+  animation_cues: z.array(z.string()),
+  composition_rules: z.array(z.string()),
+  must_include: z.array(z.string()),
+  avoid: z.array(z.string()),
+  citations: z.array(sceneEvidenceSchema),
+});
+export type SceneSpec = z.infer<typeof sceneSpecSchema>;
+
+export const sceneGroundingSchema = z.object({
+  scene_name: z.string(),
+  current_frame: z.number().int(),
+  frame_start: z.number().int(),
+  frame_end: z.number().int(),
+  active_object: z.string().nullable(),
+  selected_objects: z.array(z.string()),
+  object_count: z.number().int().nonnegative(),
+  collection_names: z.array(z.string()),
+  camera_names: z.array(z.string()),
+  light_names: z.array(z.string()),
+  object_names: z.array(z.string()),
+  summary_lines: z.array(z.string()),
+  viewport_image: z.string().nullable(),
+});
+export type SceneGrounding = z.infer<typeof sceneGroundingSchema>;
+
+export const sceneGraphNodeSchema = z.object({
+  id: z.string(),
+  type: sceneNodeTypeSchema,
+  status: sceneNodeStatusSchema,
+  label: z.string(),
+  summary: z.string(),
+  detail_lines: z.array(z.string()),
+  x: z.number(),
+  y: z.number(),
+  citations: z.array(sceneEvidenceSchema),
+  clusterable: z.boolean(),
+});
+export type SceneGraphNode = z.infer<typeof sceneGraphNodeSchema>;
+
+export const sceneGraphEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  kind: z.enum(["feeds", "verifies", "resolves", "controls", "reports"]),
+  label: z.string(),
+});
+export type SceneGraphEdge = z.infer<typeof sceneGraphEdgeSchema>;
+
+export const sceneValidationIssueSchema = z.object({
+  id: z.string(),
+  severity: validationSeveritySchema,
+  code: z.string(),
+  message: z.string(),
+  suggested_fix: z.string(),
+  node_ids: z.array(z.string()),
+  blocking: z.boolean(),
+});
+export type SceneValidationIssue = z.infer<typeof sceneValidationIssueSchema>;
+
+export const blenderActionSchema = z.object({
+  id: z.string(),
+  kind: blenderActionKindSchema,
+  label: z.string(),
+  detail: z.string(),
+  command: z.string(),
+  target_node_ids: z.array(z.string()),
+  status: blenderActionStatusSchema,
+});
+export type BlenderAction = z.infer<typeof blenderActionSchema>;
+
+export const blenderCommandPlanSchema = z.object({
+  scene_id: z.string(),
+  summary: z.string(),
+  notes: z.array(z.string()),
+  actions: z.array(blenderActionSchema),
+});
+export type BlenderCommandPlan = z.infer<typeof blenderCommandPlanSchema>;
+
+export const blenderRunStateSchema = z.object({
+  bridge_mode: blenderBridgeModeSchema,
+  status: blenderRunStatusSchema,
+  endpoint_configured: z.boolean(),
+  summary: z.string(),
+  last_applied_at: z.string().nullable(),
+  command_plan: blenderCommandPlanSchema,
+});
+export type BlenderRunState = z.infer<typeof blenderRunStateSchema>;
+
+export const sceneWorkflowSkillSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  purpose: z.string(),
+  when_to_use: z.string(),
+  steps: z.array(z.string()),
+  codex_prompt: z.string(),
+  target_node_ids: z.array(z.string()),
+});
+export type SceneWorkflowSkill = z.infer<typeof sceneWorkflowSkillSchema>;
+
+export const tinyFishEventSchema = z.object({
+  id: z.string(),
+  type: tinyFishEventTypeSchema,
+  title: z.string(),
+  detail: z.string(),
+  timestamp: z.string(),
+  run_id: z.string().nullable(),
+  streaming_url: z.string().nullable(),
+});
+export type TinyFishEvent = z.infer<typeof tinyFishEventSchema>;
+
+export const tinyFishCapabilityProfileSchema = z.object({
+  name: z.string(),
+  docs_url: z.url(),
+  api_base: z.url(),
+  primary_endpoint: z.string(),
+  browser_profiles: z.array(
     z.object({
-      url: z.url(),
-      snippet: z.string(),
+      id: browserModeSchema,
+      label: z.string(),
+      best_for: z.string(),
     }),
   ),
-  surface_suggestion: surfaceTypeSchema,
-  mcp_tools_needed: z.array(z.string()),
-  confidence: z.number(),
+  event_types: z.array(z.string()),
+  constraints: z.array(z.string()),
+  example_goal_templates: z.array(z.string()),
 });
-export type WorkflowSpec = z.infer<typeof workflowSpecSchema>;
+export type TinyFishCapabilityProfile = z.infer<typeof tinyFishCapabilityProfileSchema>;
 
-export const skillMatchSchema = z.object({
-  skill_id: z.string(),
-  score: z.number(),
-});
-export type SkillMatch = z.infer<typeof skillMatchSchema>;
-
-export const compilerDecisionKindSchema = z.enum(["reuse", "fork", "compose", "create"]);
-export type CompilerDecisionKind = z.infer<typeof compilerDecisionKindSchema>;
-
-export const compilerDecisionSchema = z.object({
-  decision: compilerDecisionKindSchema,
-  reason: z.string(),
-  nearest_skills: z.array(skillMatchSchema),
-  composed_from: z.array(z.string()),
-  forked_from: z.string().nullable(),
-});
-export type CompilerDecision = z.infer<typeof compilerDecisionSchema>;
-
-export const skillRecordSchema = z.object({
-  skill_id: z.string(),
-  name: z.string(),
-  description: z.string(),
-  category: z.string(),
-  tags: z.array(z.string()),
-  version: z.string(),
-  status: z.enum(["active", "draft", "paused"]),
-  forked_from: z.string().nullable(),
-  composed_from: z.array(z.string()),
-  source_urls: z.array(z.url()),
-  source_hashes: z.array(z.string()),
-  surface_type: surfaceTypeSchema,
-  usage_count: z.number(),
-  last_used_at: z.string(),
-  last_scanned_at: z.string(),
-  last_patched_at: z.string().nullable(),
-  eval_score: z.number(),
-});
-export type SkillRecord = z.infer<typeof skillRecordSchema>;
-
-export const surfaceSpecSchema = z.object({
-  surface_type: surfaceTypeSchema,
-  display_name: z.string(),
-  short_description: z.string(),
-  icon: z.string(),
-  brand_color: z.string(),
-  default_prompt: z.string(),
-  quick_actions: z.array(z.string()),
-  stats_visible: z.boolean(),
-});
-export type SurfaceSpec = z.infer<typeof surfaceSpecSchema>;
-
-export const evalResultSchema = z.object({
-  eval_id: z.string(),
-  skill_id: z.string(),
-  version: z.string(),
-  round: z.string(),
-  prompt: z.string(),
-  expected_skill: z.string(),
-  actual_skill: z.string(),
-  passed: z.boolean(),
-  metrics: z.object({
-    trigger_correct: z.boolean(),
-    schema_valid: z.boolean(),
-    source_citation_present: z.boolean(),
-    latency_ms: z.number(),
+export const sceneSessionSchema = z.object({
+  view: z.literal("orchestrator"),
+  scene_id: z.string(),
+  title: z.string(),
+  subtitle: z.string(),
+  goal: z.string(),
+  phase: scenePhaseSchema,
+  phase_label: z.string(),
+  updated_at: z.string(),
+  narrative: z.object({
+    codex_role: z.string(),
+    operator_brief: z.array(z.string()),
+    next_best_move: z.string(),
   }),
-  notes: z.string(),
+  capability_profile: tinyFishCapabilityProfileSchema,
+  available_sources: z.array(sourceCandidateSchema),
+  graph: z.object({
+    nodes: z.array(sceneGraphNodeSchema),
+    edges: z.array(sceneGraphEdgeSchema),
+  }),
+  checkpoints: z.array(
+    z.object({
+      kind: checkpointKindSchema,
+      status: sceneNodeStatusSchema,
+      note: z.string(),
+    }),
+  ),
+  tinyfish: z.object({
+    enabled: z.boolean(),
+    live: z.boolean(),
+    browser_profile: browserModeSchema,
+    status: z.string(),
+    run_id: z.string().nullable(),
+    streaming_url: z.string().nullable(),
+    docs_reasoning: z.array(z.string()),
+    events: z.array(tinyFishEventSchema),
+  }),
+  grounding: sceneGroundingSchema.nullable(),
+  scene_spec: sceneSpecSchema.nullable(),
+  workflow_skills: z.array(sceneWorkflowSkillSchema),
+  validation: z.object({
+    status: validationStatusSchema,
+    summary: z.string(),
+    issues: z.array(sceneValidationIssueSchema),
+  }),
+  blender: blenderRunStateSchema,
+  quick_actions: z.array(z.string()),
+  cluster_placeholder: z.string(),
+  export_filename: z.string(),
 });
-export type EvalResult = z.infer<typeof evalResultSchema>;
+export type SceneSession = z.infer<typeof sceneSessionSchema>;
 
-export const patchJobSchema = z.object({
-  patch_id: z.string(),
-  skill_id: z.string(),
-  previous_version: z.string(),
-  proposed_version: z.string(),
-  change_type: z.enum(["patch", "minor"]),
-  source_changed: z.boolean(),
-  changed_sources: z.array(z.url()),
-  summary: z.string(),
-  auto_promote: z.boolean(),
-  eval_required: z.boolean(),
-  approved: z.boolean(),
-});
-export type PatchJob = z.infer<typeof patchJobSchema>;
-
-export const dashboardStatSchema = z.object({
-  label: z.string(),
-  value: z.string(),
-  detail: z.string(),
-});
-export type DashboardStat = z.infer<typeof dashboardStatSchema>;
-
-export const usageStatsSchema = z.object({
-  total_skills: z.number(),
-  active_skills: z.number(),
-  total_runs: z.number(),
-  patched_this_week: z.number(),
-  mean_eval_score: z.number(),
-  top_tags: z.array(z.object({ tag: z.string(), count: z.number() })),
-});
-export type UsageStats = z.infer<typeof usageStatsSchema>;
-
-export type DashboardPayload = {
-  view: "dashboard";
-  title: string;
-  subtitle: string;
-  stats: DashboardStat[];
-  pipeline: { label: string; detail: string }[];
-  skills: SkillRecord[];
-  watchlist: { title: string; status: string; detail: string }[];
-  quick_actions: string[];
-};
-
-export type SkillPayload = {
-  view: "skill";
-  title: string;
-  subtitle: string;
-  skill: SkillRecord;
-  sources: { url: string; note: string }[];
-  evals: EvalResult[];
-  quick_actions: string[];
-};
-
-export type RunPayload = {
-  view: "run";
-  title: string;
-  subtitle: string;
-  outcome: {
-    verdict: string;
-    rationale: string[];
-    next_step: string;
-  };
-  citations: { label: string; url: string }[];
-  decision?: CompilerDecision;
-  generated_files?: string[];
-  patch?: PatchJob;
-};
-
-export type RadarPayload = DashboardPayload | SkillPayload | RunPayload;
+export type ScenePayload = SceneSession;

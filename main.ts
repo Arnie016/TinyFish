@@ -3,11 +3,20 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
+import express from "express";
 import type { Request, Response } from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "./server.js";
-import { compileSkill, extractWorkflow, patchSkill, renderPreviewPayload } from "./src/server/radar-engine.js";
+import { defaultGoal } from "./src/shared/seed.js";
+import { blenderBridgeConfigured } from "./src/server/blender-bridge.js";
+import {
+  applySceneToBlender,
+  renderSceneGraph,
+  repairSceneRun,
+  startSceneResearch,
+  validateSceneGraph,
+} from "./src/server/radar-engine.js";
 
 const distDir = import.meta.filename.endsWith(".ts")
   ? path.join(import.meta.dirname, "dist")
@@ -18,10 +27,11 @@ async function readWidgetHtml(): Promise<string> {
 }
 
 function firstString(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function jsonBody<T extends Record<string, unknown>>(req: Request): T {
+  return (req.body ?? {}) as T;
 }
 
 export async function startStreamableHTTPServer(createServerFactory: () => McpServer): Promise<void> {
@@ -29,6 +39,7 @@ export async function startStreamableHTTPServer(createServerFactory: () => McpSe
 
   const app = createMcpExpressApp({ host: "0.0.0.0" });
   app.use(cors());
+  app.use(express.json());
 
   app.get("/", async (_req: Request, res: Response) => {
     try {
@@ -39,45 +50,54 @@ export async function startStreamableHTTPServer(createServerFactory: () => McpSe
   });
 
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok" });
+    res.json({
+      status: "ok",
+      tinyfishConfigured: Boolean(process.env.TINYFISH_API_KEY),
+      blenderBridgeConfigured: blenderBridgeConfigured(),
+    });
   });
 
-  app.get("/preview-data/dashboard", (req: Request, res: Response) => {
-    res.json(renderPreviewPayload("dashboard", { category: firstString(req.query.category as string | string[] | undefined) }));
+  app.get("/preview-data/orchestrator", (req: Request, res: Response) => {
+    res.json(renderSceneGraph(firstString(req.query.sceneId as string | string[] | undefined)));
   });
 
-  app.get("/preview-data/skill/:skillId", (req: Request, res: Response) => {
-    res.json(renderPreviewPayload("skill", { skillId: firstString(req.params.skillId as string | string[] | undefined) }));
-  });
-
-  app.get("/preview-data/run", (req: Request, res: Response) => {
+  app.post("/api/scene/start", (req: Request, res: Response) => {
+    const body = jsonBody<{ goal?: string; sourceUrl?: string; browserProfile?: "lite" | "stealth" }>(req);
     res.json(
-      renderPreviewPayload("run", {
-        query: firstString(req.query.query as string | string[] | undefined) ?? "Compile a public docs workflow into a widget-ready skill.",
-        skillId: firstString(req.query.skillId as string | string[] | undefined),
+      startSceneResearch({
+        goal: body.goal ?? defaultGoal,
+        sourceUrl: body.sourceUrl,
+        browserProfile: body.browserProfile,
       }),
     );
   });
 
-  app.get("/preview-data/compile", (req: Request, res: Response) => {
-    const title = firstString(req.query.title as string | string[] | undefined) ?? "Radar Docs Compiler";
-    const workflowSpec = extractWorkflow({
-      title,
-      sourceUrls: [
-        "https://developers.openai.com/apps-sdk/quickstart",
-        "https://github.com/modelcontextprotocol/ext-apps",
-      ],
-      desiredSurface: "widget",
-    });
-
-    res.json(compileSkill({ workflowSpec }));
+  app.get("/api/scene/:sceneId", (req: Request, res: Response) => {
+    res.json(renderSceneGraph(firstString(req.params.sceneId as string | string[] | undefined)));
   });
 
-  app.get("/preview-data/patch/:skillId", (req: Request, res: Response) => {
+  app.post("/api/scene/:sceneId/validate", (req: Request, res: Response) => {
+    res.json(validateSceneGraph({ sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "" }));
+  });
+
+  app.post("/api/scene/:sceneId/blender", (req: Request, res: Response) => {
+    const body = jsonBody<{ replayFailedOnly?: boolean }>(req);
     res.json(
-      patchSkill({
-        skillId: firstString(req.params.skillId as string | string[] | undefined) ?? "radar-browser-lens",
-        reason: "Public docs example moved and the render surface needs a small selector update.",
+      applySceneToBlender({
+        sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "",
+        replayFailedOnly: body.replayFailedOnly,
+      }),
+    );
+  });
+
+  app.post("/api/scene/:sceneId/repair", (req: Request, res: Response) => {
+    const body = jsonBody<{ instruction?: string; targetNodeIds?: string[]; preferStealth?: boolean }>(req);
+    res.json(
+      repairSceneRun({
+        sceneId: firstString(req.params.sceneId as string | string[] | undefined) ?? "",
+        instruction: body.instruction,
+        targetNodeIds: body.targetNodeIds,
+        preferStealth: body.preferStealth,
       }),
     );
   });
@@ -113,8 +133,8 @@ export async function startStreamableHTTPServer(createServerFactory: () => McpSe
       console.error("Failed to start server:", err);
       process.exit(1);
     }
-    console.log(`Radar preview listening on http://localhost:${port}`);
-    console.log(`Radar MCP endpoint listening on http://localhost:${port}/mcp`);
+    console.log(`Codex scene preview listening on http://localhost:${port}`);
+    console.log(`MCP endpoint listening on http://localhost:${port}/mcp`);
   });
 
   const shutdown = () => {
