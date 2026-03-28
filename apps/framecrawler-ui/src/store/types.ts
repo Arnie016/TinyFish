@@ -9,6 +9,59 @@ export interface SceneEnvironment {
 export type ObjectCategory = 'prop' | 'setpiece' | 'character' | 'vehicle' | 'fx' | 'ui';
 export type GeometryType = 'box' | 'cylinder' | 'sphere' | 'plane' | 'cone';
 
+// Provenance & performance (pain-point features)
+export type SourceType = 'scan' | 'ai-gen' | 'manual' | 'web-ref';
+export type LicenseType = 'CC0' | 'CC-BY' | 'commercial' | 'unknown';
+
+export interface ProvenanceInfo {
+  sourceType: SourceType;
+  license: LicenseType;
+  sourceUrl: string;
+  confidence: number;
+}
+
+export interface PerformanceEstimate {
+  polyCount: number;
+  textureMemoryMB: number;
+  suggestLOD: boolean;
+}
+
+export type ValidationStatus = 'pass' | 'warn' | 'fail';
+
+export interface ValidationCheck {
+  id: string;
+  label: string;
+  status: ValidationStatus;
+  detail: string;
+  category: 'geometry' | 'material' | 'uv' | 'texture' | 'provenance';
+}
+
+export interface ValidationResult {
+  checks: ValidationCheck[];
+  passCount: number;
+  warnCount: number;
+  failCount: number;
+  overallStatus: ValidationStatus;
+  timestamp: number;
+}
+
+export interface PipelineCheckpoint {
+  stage: number;
+  label: string;
+  description: string;
+  timestamp: number | null;
+  status: 'pending' | 'active' | 'complete' | 'failed';
+  stats?: Record<string, string | number>;
+}
+
+export interface ContextualTip {
+  id: string;
+  phase: DemoPhase;
+  message: string;
+  icon: string;
+  category: 'research' | 'plan' | 'build' | 'lighting' | 'general';
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -24,6 +77,8 @@ export interface SceneObject {
   position: [number, number, number];
   scale: [number, number, number];
   geometry: GeometryType;
+  provenance?: ProvenanceInfo;
+  performance?: PerformanceEstimate;
 }
 
 export interface SceneLight {
@@ -115,9 +170,9 @@ export interface Artifact {
   color: string;
   tags: string[];
   relatedIds: string[];
-  // position in graph view (normalized 0-1)
   gx: number;
   gy: number;
+  provenance?: ProvenanceInfo;
 }
 
 export type DemoPhase = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;

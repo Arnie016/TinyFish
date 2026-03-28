@@ -1,4 +1,4 @@
-import type { SceneMetadata, ResearchSource, TinyFishEvent, Artifact } from './types';
+import type { SceneMetadata, ResearchSource, TinyFishEvent, Artifact, ValidationResult, PipelineCheckpoint, ContextualTip } from './types';
 
 export const DEMO_TOPIC = 'cyberpunk alleyway at night';
 
@@ -117,6 +117,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [-4, 3, 0],
       scale: [1, 6, 12],
       geometry: 'box',
+      provenance: { sourceType: 'web-ref', license: 'CC-BY', sourceUrl: 'https://www.artstation.com/artwork/cyberpunk-alley-concept', confidence: 0.95 },
+      performance: { polyCount: 4200, textureMemoryMB: 2.1, suggestLOD: false },
     },
     {
       id: 'obj-wall-right',
@@ -133,6 +135,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [4, 2.5, 0],
       scale: [1, 5, 12],
       geometry: 'box',
+      provenance: { sourceType: 'web-ref', license: 'CC-BY', sourceUrl: 'https://www.artstation.com/artwork/cyberpunk-alley-concept', confidence: 0.95 },
+      performance: { polyCount: 3800, textureMemoryMB: 2.4, suggestLOD: false },
     },
     {
       id: 'obj-ground',
@@ -149,6 +153,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [0, -0.01, 0],
       scale: [8, 0.05, 15],
       geometry: 'box',
+      provenance: { sourceType: 'manual', license: 'CC0', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.92 },
+      performance: { polyCount: 200, textureMemoryMB: 4.0, suggestLOD: false },
     },
     {
       id: 'obj-dumpster',
@@ -165,6 +171,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [-2.5, 0.5, 3],
       scale: [1.2, 1, 0.8],
       geometry: 'box',
+      provenance: { sourceType: 'scan', license: 'CC-BY', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.88 },
+      performance: { polyCount: 8400, textureMemoryMB: 4.2, suggestLOD: true },
     },
     {
       id: 'obj-neon-ramen',
@@ -181,6 +189,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [-3.4, 3.5, 1],
       scale: [1.5, 0.4, 0.1],
       geometry: 'box',
+      provenance: { sourceType: 'ai-gen', license: 'CC0', sourceUrl: 'https://www.artstation.com/artwork/cyberpunk-alley-concept', confidence: 0.93 },
+      performance: { polyCount: 1200, textureMemoryMB: 0.5, suggestLOD: false },
     },
     {
       id: 'obj-neon-bar',
@@ -197,6 +207,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [3.4, 2.8, -2],
       scale: [1, 0.3, 0.1],
       geometry: 'box',
+      provenance: { sourceType: 'ai-gen', license: 'CC0', sourceUrl: 'https://www.artstation.com/artwork/cyberpunk-alley-concept', confidence: 0.91 },
+      performance: { polyCount: 980, textureMemoryMB: 0.4, suggestLOD: false },
     },
     {
       id: 'obj-fire-escape',
@@ -213,6 +225,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [-3.4, 2, -2],
       scale: [1.5, 4, 0.1],
       geometry: 'box',
+      provenance: { sourceType: 'web-ref', license: 'CC-BY', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.86 },
+      performance: { polyCount: 12600, textureMemoryMB: 3.8, suggestLOD: true },
     },
     {
       id: 'obj-steam-vent',
@@ -229,6 +243,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [2, 1, 4],
       scale: [0.15, 2, 0.15],
       geometry: 'cylinder',
+      provenance: { sourceType: 'web-ref', license: 'CC0', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.84 },
+      performance: { polyCount: 640, textureMemoryMB: 0.3, suggestLOD: false },
     },
     {
       id: 'obj-motorcycle',
@@ -245,6 +261,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [2, 0.35, 1],
       scale: [0.6, 0.7, 1.4],
       geometry: 'box',
+      provenance: { sourceType: 'ai-gen', license: 'unknown', sourceUrl: 'https://en.wikipedia.org/wiki/Cyberpunk', confidence: 0.79 },
+      performance: { polyCount: 18500, textureMemoryMB: 8.4, suggestLOD: true },
     },
     {
       id: 'obj-puddle',
@@ -261,6 +279,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [0, 0.01, 1],
       scale: [2.5, 0.02, 2],
       geometry: 'box',
+      provenance: { sourceType: 'manual', license: 'CC0', sourceUrl: 'https://www.blenderguru.com/tutorials/lighting-neon-scenes', confidence: 0.87 },
+      performance: { polyCount: 100, textureMemoryMB: 1.0, suggestLOD: false },
     },
     {
       id: 'obj-drone',
@@ -277,6 +297,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [1, 4.5, -1],
       scale: [0.3, 0.15, 0.3],
       geometry: 'sphere',
+      provenance: { sourceType: 'ai-gen', license: 'commercial', sourceUrl: 'https://en.wikipedia.org/wiki/Cyberpunk', confidence: 0.76 },
+      performance: { polyCount: 6200, textureMemoryMB: 3.2, suggestLOD: false },
     },
     {
       id: 'obj-ac-unit',
@@ -293,6 +315,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [3.4, 3.5, 0],
       scale: [0.8, 0.6, 0.4],
       geometry: 'box',
+      provenance: { sourceType: 'web-ref', license: 'CC-BY', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.83 },
+      performance: { polyCount: 2400, textureMemoryMB: 1.8, suggestLOD: false },
     },
     {
       id: 'obj-cables',
@@ -309,6 +333,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [0, 5.5, 0],
       scale: [0.08, 0.08, 10],
       geometry: 'cylinder',
+      provenance: { sourceType: 'web-ref', license: 'CC-BY', sourceUrl: 'https://www.artstation.com/artwork/cyberpunk-alley-concept', confidence: 0.90 },
+      performance: { polyCount: 1800, textureMemoryMB: 0.6, suggestLOD: false },
     },
     {
       id: 'obj-trash',
@@ -325,6 +351,8 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
       position: [-2.5, 0.2, 4],
       scale: [0.5, 0.35, 0.5],
       geometry: 'sphere',
+      provenance: { sourceType: 'web-ref', license: 'CC0', sourceUrl: 'https://www.turbosquid.com/cyberpunk-city-assets', confidence: 0.80 },
+      performance: { polyCount: 320, textureMemoryMB: 0.2, suggestLOD: false },
     },
   ],
   camera: {
@@ -472,4 +500,42 @@ export const SCANNING_STEPS = [
   'Compiling scene metadata...',
   'Validating source citations...',
   'Research complete',
+];
+
+export const MOCK_VALIDATION_RESULT: ValidationResult = {
+  checks: [
+    { id: 'v-poly-budget', label: 'Polygon Budget', status: 'pass', detail: '62,400 / 100,000', category: 'geometry' },
+    { id: 'v-uv-presence', label: 'UV Maps Present', status: 'pass', detail: '14/14 objects have UVs', category: 'uv' },
+    { id: 'v-material-assign', label: 'Material Assignment', status: 'pass', detail: 'All objects have materials', category: 'material' },
+    { id: 'v-non-manifold', label: 'Non-Manifold Geometry', status: 'warn', detail: '2 objects with non-manifold edges', category: 'geometry' },
+    { id: 'v-tex-resolution', label: 'Texture Resolution', status: 'pass', detail: 'All textures within 2K limit', category: 'texture' },
+    { id: 'v-source-citation', label: 'Source Citations', status: 'pass', detail: '14/14 objects have source URLs', category: 'provenance' },
+    { id: 'v-license-check', label: 'License Compliance', status: 'warn', detail: '1 object has unknown license', category: 'provenance' },
+    { id: 'v-overlap-detect', label: 'Overlapping Faces', status: 'pass', detail: 'No overlapping geometry', category: 'geometry' },
+    { id: 'v-tex-memory', label: 'Texture Memory', status: 'pass', detail: '48.2 MB / 256 MB budget', category: 'texture' },
+    { id: 'v-scale-uniform', label: 'Scale Consistency', status: 'pass', detail: 'All objects use metric scale', category: 'geometry' },
+  ],
+  passCount: 8,
+  warnCount: 2,
+  failCount: 0,
+  overallStatus: 'pass',
+  timestamp: Date.now(),
+};
+
+export const MOCK_PIPELINE_CHECKPOINTS: PipelineCheckpoint[] = [
+  { stage: 1, label: 'Raw Scrape', description: 'TinyFish web research', timestamp: null, status: 'pending' },
+  { stage: 2, label: 'Validated Spec', description: 'QA checks passed', timestamp: null, status: 'pending' },
+  { stage: 3, label: 'Blockout Sent', description: 'Pushed to Blender', timestamp: null, status: 'pending' },
+  { stage: 4, label: 'Artist Refinement', description: 'Pending artist review', timestamp: null, status: 'pending' },
+];
+
+export const MOCK_CONTEXTUAL_TIPS: ContextualTip[] = [
+  { id: 'tip-1', phase: 2, message: 'TinyFish extracts structured data \u2014 every claim needs a source URL', icon: '\uD83D\uDC1F', category: 'research' },
+  { id: 'tip-2', phase: 3, message: 'Artifacts with unknown licenses are flagged during validation', icon: '\u26A0\uFE0F', category: 'research' },
+  { id: 'tip-3', phase: 4, message: 'SceneSpec validates polygon budgets before sending to Blender', icon: '\u2705', category: 'plan' },
+  { id: 'tip-4', phase: 5, message: 'Objects use graybox primitives \u2014 swap for production meshes later', icon: '\uD83D\uDFE8', category: 'build' },
+  { id: 'tip-5', phase: 5, message: 'Auto-record can change keyframes unexpectedly \u2014 disable when posing', icon: '\u26A0\uFE0F', category: 'general' },
+  { id: 'tip-6', phase: 6, message: 'Practical lights should match visible light sources in scene', icon: '\uD83D\uDCA1', category: 'lighting' },
+  { id: 'tip-7', phase: 7, message: 'Camera paths export as Blender animation curves via SceneSpec', icon: '\uD83C\uDFAC', category: 'general' },
+  { id: 'tip-8', phase: 8, message: 'All assets tracked: scan/AI/manual/web-ref with license status', icon: '\uD83D\uDCCB', category: 'general' },
 ];

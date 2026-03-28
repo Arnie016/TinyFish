@@ -47,6 +47,17 @@ function ArtifactNode({ artifact, selected, onDragStart }: {
         <span className="text-[8px] font-medium text-text-primary whitespace-nowrap">
           {artifact.name}
         </span>
+        {artifact.provenance && (
+          <span
+            className={`text-[6px] font-mono px-0.5 rounded ${
+              artifact.provenance.license === 'unknown'
+                ? 'bg-warning/15 text-warning'
+                : 'bg-text-muted/10 text-text-muted'
+            }`}
+          >
+            {artifact.provenance.sourceType}
+          </span>
+        )}
       </div>
     </motion.div>
   );

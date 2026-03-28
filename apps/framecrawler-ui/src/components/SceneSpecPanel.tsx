@@ -159,7 +159,21 @@ export function SceneSpecPanel() {
                 style={{ backgroundColor: CATEGORY_COLORS[obj.category] || '#6B7280' }}
               />
               <span className="text-[9px] text-text-secondary flex-1 truncate">{obj.name}</span>
-              <span className="text-[8px] font-mono text-text-muted">{(obj.confidence * 100).toFixed(0)}%</span>
+              {obj.provenance && (
+                <>
+                  <span className="text-[7px] font-mono px-1 rounded bg-cyan/10 text-cyan border border-cyan/15 shrink-0">
+                    {obj.provenance.sourceType}
+                  </span>
+                  <span className={`text-[7px] font-mono px-1 rounded border shrink-0 ${
+                    obj.provenance.license === 'unknown'
+                      ? 'bg-warning/10 text-warning border-warning/15'
+                      : 'bg-success/10 text-success border-success/15'
+                  }`}>
+                    {obj.provenance.license}
+                  </span>
+                </>
+              )}
+              <span className="text-[8px] font-mono text-text-muted shrink-0">{(obj.confidence * 100).toFixed(0)}%</span>
             </div>
           ))}
         </motion.div>
