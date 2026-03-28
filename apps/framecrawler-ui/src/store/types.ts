@@ -130,7 +130,17 @@ export interface ResearchSource {
   thumbnail_gradient: [string, string];
 }
 
-export type TinyFishEventType = 'STARTED' | 'STREAMING_URL' | 'PROGRESS' | 'HEARTBEAT' | 'COMPLETE';
+export type TinyFishEventType = 'STARTED' | 'STREAMING_URL' | 'PROGRESS' | 'HEARTBEAT' | 'COMPLETE' | 'ERROR';
+
+export interface TinyFishSession {
+  id: string;
+  goal: string;
+  label: string;
+  status: 'pending' | 'running' | 'complete' | 'error';
+  events: TinyFishEvent[];
+  streamingUrl: string | null;
+  progress: number;
+}
 
 export interface TinyFishEvent {
   type: TinyFishEventType;

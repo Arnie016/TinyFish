@@ -6,6 +6,7 @@ import { SourceCard } from './SourceCard';
 export function ResearchPanel() {
   const tinyFishEvents = useFrameCrawlerStore((s) => s.tinyFishEvents);
   const tinyFishActive = useFrameCrawlerStore((s) => s.tinyFishActive);
+  const tinyFishSessions = useFrameCrawlerStore((s) => s.tinyFishSessions);
   const scanProgress = useFrameCrawlerStore((s) => s.scanProgress);
   const researchSources = useFrameCrawlerStore((s) => s.researchSources);
 
@@ -29,12 +30,13 @@ export function ResearchPanel() {
         )}
       </div>
 
-      {/* TinyFish browser */}
+      {/* Live browser screens */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
       >
         <TinyFishLiveView
+          sessions={tinyFishSessions}
           events={tinyFishEvents}
           progress={scanProgress}
           isActive={tinyFishActive}

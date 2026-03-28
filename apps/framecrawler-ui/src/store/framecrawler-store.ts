@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   ActivityEvent,
   TinyFishEvent,
+  TinyFishSession,
   SceneMetadata,
   ResearchSource,
   DemoPhase,
@@ -33,6 +34,95 @@ function updateCheckpoint(checkpoints: PipelineCheckpoint[], stage: number, upda
   return checkpoints.map((c) => c.stage === stage ? { ...c, ...update } : c);
 }
 
+const RESEARCH_GOALS = [
+  {
+    id: 'tf-visual',
+    label: 'Visual References',
+    goal: 'Find cyberpunk alleyway concept art and reference images. Extract: environment details, major props, materials, color palettes. List each item with a brief description.',
+    url: 'https://www.artstation.com/search?sort_by=relevance&query=cyberpunk%20alley%20night',
+  },
+  {
+    id: 'tf-lighting',
+    label: 'Lighting & Camera',
+    goal: 'Find neon lighting techniques and camera angles for cyberpunk night scenes. Extract: key/fill/rim light descriptions, practical light sources, camera shot types.',
+    url: 'https://www.blenderguru.com/tutorials/lighting-neon-scenes',
+  },
+];
+
+function startTinyFishSession(
+  session: TinyFishSession & { url?: string },
+  onEvent: (sessionId: string, event: TinyFishEvent) => void,
+  onComplete: (sessionId: string) => void,
+): AbortController {
+  const controller = new AbortController();
+
+  fetch('/api/tinyfish/run-sse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ goal: session.goal, url: session.url }),
+    signal: controller.signal,
+  }).then(async (res) => {
+    if (!res.ok || !res.body) {
+      onEvent(session.id, { type: 'ERROR', timestamp: Date.now(), message: `API error: ${res.status}` });
+      onComplete(session.id);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let currentEventType = '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('event:')) {
+          currentEventType = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith('data:')) {
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr) continue;
+          try {
+            const data = JSON.parse(dataStr);
+            // TinyFish sends type inside data object
+            const eventType = currentEventType || data.type || 'PROGRESS';
+            const tfEvent: TinyFishEvent = {
+              type: eventType as TinyFishEvent['type'],
+              timestamp: Date.now(),
+              message: data.message || data.status || data.step || JSON.stringify(data).slice(0, 120),
+              url: data.url || data.streaming_url || data.observe_url || undefined,
+            };
+            onEvent(session.id, tfEvent);
+
+            if (eventType === 'COMPLETE' || eventType === 'ERROR' || data.status === 'completed') {
+              onComplete(session.id);
+              return;
+            }
+          } catch {
+            onEvent(session.id, { type: 'PROGRESS', timestamp: Date.now(), message: dataStr.slice(0, 120) });
+          }
+          currentEventType = '';
+        }
+      }
+    }
+    onComplete(session.id);
+  }).catch((err) => {
+    if (err.name !== 'AbortError') {
+      onEvent(session.id, { type: 'ERROR', timestamp: Date.now(), message: String(err) });
+      onComplete(session.id);
+    }
+  });
+
+  return controller;
+}
+
 async function pushSceneToBlender(spec: SceneMetadata): Promise<boolean> {
   try {
     const res = await fetch('/api/push-scene', {
@@ -53,6 +143,7 @@ interface FrameCrawlerState {
   researchSources: ResearchSource[];
   tinyFishEvents: TinyFishEvent[];
   tinyFishActive: boolean;
+  tinyFishSessions: TinyFishSession[];
   activity: ActivityEvent[];
 
   // Viewport visibility
@@ -109,6 +200,7 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
   researchSources: [],
   tinyFishEvents: [],
   tinyFishActive: false,
+  tinyFishSessions: [],
   activity: [],
   visibleObjectIds: [],
   visibleLightIds: [],
@@ -204,65 +296,114 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
     }, 80);
   },
 
-  // Phase 2: TinyFish research
+  // Phase 2: TinyFish research — launches real API sessions
   demoResearch: () => {
     const state = get();
     state.pushEvent({
       type: 'research_started',
       title: 'TinyFish research started',
-      detail: 'Using /run-sse for live browser preview',
+      detail: `Launching ${RESEARCH_GOALS.length} parallel sessions via /run-sse`,
     });
+
+    // Create session objects
+    const sessions: TinyFishSession[] = RESEARCH_GOALS.map((g) => ({
+      id: g.id,
+      goal: g.goal,
+      label: g.label,
+      status: 'running' as const,
+      events: [],
+      streamingUrl: null,
+      progress: 0,
+    }));
+
     set((s) => ({
       demoPhase: 2,
       scanProgress: 0,
       scanStatus: SCANNING_STEPS[0],
       tinyFishEvents: [],
       tinyFishActive: true,
+      tinyFishSessions: sessions,
       pipelineCheckpoints: updateCheckpoint(s.pipelineCheckpoints, 1, { status: 'active', timestamp: Date.now() }),
       activeTip: findTip(2, s.dismissedTipIds),
     }));
 
-    // Stream TinyFish events
-    MOCK_TINYFISH_EVENTS.forEach((tfEvt) => {
-      setTimeout(() => {
-        set((s) => {
-          const newEvents = [...s.tinyFishEvents, tfEvt];
-          const isComplete = tfEvt.type === 'COMPLETE';
+    let completedCount = 0;
 
-          if (tfEvt.type === 'PROGRESS' || tfEvt.type === 'COMPLETE') {
+    // Launch each session in parallel with real TinyFish API
+    for (const goal of RESEARCH_GOALS) {
+      const session = { ...sessions.find((s) => s.id === goal.id)!, goal: goal.goal, url: goal.url };
+
+      startTinyFishSession(
+        session,
+        // onEvent
+        (sessionId, event) => {
+          set((s) => {
+            const updated = s.tinyFishSessions.map((sess) => {
+              if (sess.id !== sessionId) return sess;
+              const newEvents = [...sess.events, event];
+              const streamingUrl = event.type === 'STREAMING_URL' && event.url ? event.url : sess.streamingUrl;
+              const progress = Math.min(sess.progress + 5, 95);
+              return { ...sess, events: newEvents, streamingUrl, progress };
+            });
+
+            // Also push to flat tinyFishEvents for backward compat
+            const allEvents = [...s.tinyFishEvents, event];
+
+            return { tinyFishSessions: updated, tinyFishEvents: allEvents };
+          });
+
+          // Log key events to activity feed
+          if (event.type === 'STREAMING_URL') {
             get().pushEvent({
               type: 'tinyfish_progress',
-              title: isComplete ? 'Research complete' : 'TinyFish',
-              detail: tfEvt.message,
+              title: `${goal.label}: browser live`,
+              detail: event.url || 'Session started',
+            });
+          } else if (event.type === 'PROGRESS') {
+            get().pushEvent({
+              type: 'tinyfish_progress',
+              title: `${goal.label}`,
+              detail: event.message,
             });
           }
+        },
+        // onComplete
+        (sessionId) => {
+          completedCount++;
+          set((s) => {
+            const updated = s.tinyFishSessions.map((sess) =>
+              sess.id === sessionId ? { ...sess, status: 'complete' as const, progress: 100 } : sess,
+            );
+            const allDone = completedCount >= RESEARCH_GOALS.length;
+            return {
+              tinyFishSessions: updated,
+              tinyFishActive: !allDone,
+              scanProgress: allDone ? 100 : Math.round((completedCount / RESEARCH_GOALS.length) * 100),
+              scanStatus: allDone ? 'Research complete' : `${completedCount}/${RESEARCH_GOALS.length} sessions complete`,
+            };
+          });
 
-          return {
-            tinyFishEvents: newEvents,
-            tinyFishActive: !isComplete,
-          };
-        });
-      }, tfEvt.timestamp);
-    });
+          if (completedCount >= RESEARCH_GOALS.length) {
+            get().pushEvent({
+              type: 'tinyfish_progress',
+              title: 'All research complete',
+              detail: `${RESEARCH_GOALS.length} sessions finished`,
+            });
+          }
+        },
+      );
+    }
 
-    // Animate scanning progress
+    // Progress animation fallback (updates scan status steps while waiting)
     let step = 0;
     const interval = setInterval(() => {
       step++;
-      if (step >= SCANNING_STEPS.length) {
+      if (step >= SCANNING_STEPS.length || !get().tinyFishActive) {
         clearInterval(interval);
-        set({
-          scanProgress: 100,
-          scanStatus: SCANNING_STEPS[SCANNING_STEPS.length - 1],
-        });
         return;
       }
-      const progress = Math.round((step / (SCANNING_STEPS.length - 1)) * 100);
-      set({
-        scanProgress: progress,
-        scanStatus: SCANNING_STEPS[step],
-      });
-    }, 1500);
+      set({ scanStatus: SCANNING_STEPS[step] });
+    }, 2500);
   },
 
   // Phase 3: Extract sources
@@ -421,6 +562,7 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
       researchSources: [],
       tinyFishEvents: [],
       tinyFishActive: false,
+      tinyFishSessions: [],
       activity: [],
       visibleObjectIds: [],
       visibleLightIds: [],
