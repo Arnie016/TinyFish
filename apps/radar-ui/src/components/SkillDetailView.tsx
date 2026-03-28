@@ -1,7 +1,9 @@
 import { useRadarStore } from '../store/radar-store';
+import { ExecutionPanel } from './ExecutionPanel';
+import { SOURCE_ORIGIN_CONFIG } from '../store/mock-data';
 
 function formatDate(iso: string | null) {
-  if (!iso) return '—';
+  if (!iso) return '\u2014';
   const d = new Date(iso);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
@@ -16,6 +18,8 @@ export function SkillDetailView({ skillId }: { skillId: string }) {
     deprecated: '#EF4444',
   };
 
+  const originCfg = SOURCE_ORIGIN_CONFIG[skill.source_origin] || SOURCE_ORIGIN_CONFIG.manual;
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -28,10 +32,7 @@ export function SkillDetailView({ skillId }: { skillId: string }) {
           <div className="flex items-center gap-2 shrink-0">
             <span
               className="px-2.5 py-1 rounded-full text-xs font-bold"
-              style={{
-                backgroundColor: `${statusColors[skill.status]}20`,
-                color: statusColors[skill.status],
-              }}
+              style={{ backgroundColor: `${statusColors[skill.status]}20`, color: statusColors[skill.status] }}
             >
               {skill.status}
             </span>
@@ -41,7 +42,15 @@ export function SkillDetailView({ skillId }: { skillId: string }) {
           </div>
         </div>
 
-        <div className="flex gap-1.5 flex-wrap">
+        {/* Source origin + tags */}
+        <div className="flex items-center gap-2 flex-wrap mb-3">
+          <span
+            className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded"
+            style={{ backgroundColor: `${originCfg.color}20`, color: originCfg.color }}
+          >
+            <span>{originCfg.icon}</span>
+            {originCfg.label}
+          </span>
           {skill.tags.map((tag) => (
             <span key={tag} className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-accent/10 text-accent">
               {tag}
@@ -53,48 +62,73 @@ export function SkillDetailView({ skillId }: { skillId: string }) {
         </div>
 
         {skill.forked_from && (
-          <div className="mt-3 flex items-center gap-1.5 text-xs text-text-muted">
-            <span>⑂</span>
-            <span>
-              Forked from <span className="font-mono text-accent">{skill.forked_from}</span>
-            </span>
+          <div className="flex items-center gap-1.5 text-xs text-text-muted">
+            <span>\u2442</span>
+            <span>Forked from <span className="font-mono text-accent">{skill.forked_from}</span></span>
           </div>
         )}
       </div>
 
-      {/* Metrics grid */}
+      {/* Metrics */}
       <div className="grid grid-cols-2 gap-3">
-        <MetricCard label="Usage Count" value={String(skill.usage_count)} icon="▶" />
-        <MetricCard label="Eval Score" value={skill.eval_score ? `${(skill.eval_score * 100).toFixed(0)}%` : '—'} icon="✓" />
-        <MetricCard label="Last Used" value={formatDate(skill.last_used_at)} icon="◷" />
-        <MetricCard label="Last Patched" value={formatDate(skill.last_patched_at)} icon="⟳" />
+        <MetricCard label="Usage Count" value={String(skill.usage_count)} icon="\u25B6" />
+        <MetricCard label="Eval Score" value={skill.eval_score ? `${(skill.eval_score * 100).toFixed(0)}%` : '\u2014'} icon="\u2713" />
+        <MetricCard label="Last Used" value={formatDate(skill.last_used_at)} icon="\u25F7" />
+        <MetricCard label="Last Patched" value={formatDate(skill.last_patched_at)} icon="\u27F3" />
       </div>
+
+      {/* API Endpoints */}
+      {skill.api_endpoints && skill.api_endpoints.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">API Endpoints</h3>
+          <div className="space-y-1">
+            {skill.api_endpoints.map((ep) => (
+              <div key={ep} className="font-mono text-xs text-accent px-2 py-1 rounded bg-bg">
+                {ep}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Context snippets */}
+      {skill.context_snippets && skill.context_snippets.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Context</h3>
+          <div className="space-y-1">
+            {skill.context_snippets.map((snip, i) => (
+              <div key={i} className="font-mono text-[11px] text-text-secondary px-2 py-1 rounded bg-bg">
+                {snip}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Sources */}
       <div className="rounded-xl border border-border bg-surface p-4">
         <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Sources</h3>
         {skill.source_urls.map((url) => (
           <div key={url} className="flex items-center gap-2 text-xs">
-            <span className="text-accent">→</span>
+            <span className="text-accent">\u2192</span>
             <span className="font-mono text-text-primary truncate">{url}</span>
           </div>
         ))}
         <div className="mt-2 flex items-center gap-2 text-[10px] text-text-muted">
-          <span>Last scanned: {formatDate(skill.last_scanned_at)}</span>
-          <span>·</span>
+          <span>Scanned: {formatDate(skill.last_scanned_at)}</span>
+          <span>\u00B7</span>
           <span>Hash: {skill.source_hashes[0]}</span>
+          {skill.extraction_meta?.tinyfish_run_id && (
+            <>
+              <span>\u00B7</span>
+              <span className="text-accent">TF: {skill.extraction_meta.tinyfish_run_id}</span>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Surface */}
-      <div className="rounded-xl border border-border bg-surface p-4">
-        <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Surface</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono px-2 py-1 rounded-lg bg-accent/10 text-accent border border-accent/20">
-            {skill.surface_type}
-          </span>
-        </div>
-      </div>
+      {/* Execution targets */}
+      <ExecutionPanel skillId={skillId} />
     </div>
   );
 }

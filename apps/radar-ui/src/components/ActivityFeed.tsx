@@ -14,6 +14,8 @@ const EVENT_CONFIG: Record<ActivityEventType, { icon: string; color: string }> =
   patch_detected: { icon: '⚠', color: '#F59E0B' },
   patch_applied: { icon: '✓', color: '#10B981' },
   skill_created: { icon: '★', color: '#7C3AED' },
+  tinyfish_progress: { icon: '🐟', color: '#3B82F6' },
+  source_discovered: { icon: '◎', color: '#10B981' },
   info: { icon: 'ℹ', color: '#6B7280' },
 };
 

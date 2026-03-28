@@ -4,6 +4,7 @@ import type {
   RunResult,
   ActivityEvent,
   DetailView,
+  TinyFishEvent,
 } from './types';
 import {
   SEED_SKILLS,
@@ -12,6 +13,7 @@ import {
   MOCK_COMPILED_SKILL,
   MOCK_RUN_RESULT,
   MOCK_PATCH_JOB,
+  MOCK_TINYFISH_EVENTS,
   SCANNING_STEPS,
 } from './mock-data';
 
@@ -26,8 +28,12 @@ interface RadarState {
   patchedToday: number;
   totalRuns: number;
 
+  // TinyFish state
+  tinyFishEvents: TinyFishEvent[];
+  tinyFishActive: boolean;
+
   // Demo state
-  demoPhase: number; // 0=idle, 1=scanning, 2=spec, 3=similarity, 4=compiling, 5=compiled, 6=running, 7=ran, 8=patching, 9=patched
+  demoPhase: number;
   scanProgress: number;
   scanStatus: string;
 
@@ -36,7 +42,7 @@ interface RadarState {
   setDetailView: (view: DetailView) => void;
   selectSkill: (skillId: string) => void;
 
-  // Demo sequence actions
+  // Demo sequence
   demoStartScan: () => void;
   demoShowSpec: () => void;
   demoFindSimilar: () => void;
@@ -53,7 +59,9 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   activity: [],
   detailView: { kind: 'none' },
   patchedToday: 0,
-  totalRuns: 87,
+  totalRuns: 193,
+  tinyFishEvents: [],
+  tinyFishActive: false,
   demoPhase: 0,
   scanProgress: 0,
   scanStatus: '',
@@ -80,15 +88,42 @@ export const useRadarStore = create<RadarState>((set, get) => ({
       demoPhase: 1,
       scanProgress: 0,
       scanStatus: SCANNING_STEPS[0],
+      tinyFishEvents: [],
+      tinyFishActive: true,
       detailView: {
         kind: 'scanning',
         url: 'https://supabase.com/docs/guides/auth/quickstarts/nextjs',
         progress: 0,
         status: SCANNING_STEPS[0],
+        tinyfish_events: [],
       },
     });
 
-    // Animate scanning progress
+    // Stream TinyFish events
+    MOCK_TINYFISH_EVENTS.forEach((tfEvt) => {
+      setTimeout(() => {
+        set((s) => {
+          const newEvents = [...s.tinyFishEvents, tfEvt];
+          const isComplete = tfEvt.type === 'COMPLETE';
+
+          // Push activity events for key TinyFish moments
+          if (tfEvt.type === 'PROGRESS' || tfEvt.type === 'COMPLETE') {
+            get().pushEvent({
+              type: 'tinyfish_progress',
+              title: isComplete ? 'Extraction complete' : 'TinyFish',
+              detail: tfEvt.message,
+            });
+          }
+
+          return {
+            tinyFishEvents: newEvents,
+            tinyFishActive: !isComplete,
+          };
+        });
+      }, tfEvt.timestamp);
+    });
+
+    // Animate scanning progress in sync
     let step = 0;
     const interval = setInterval(() => {
       step++;
@@ -97,7 +132,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
         const s = get();
         s.pushEvent({
           type: 'scan_complete',
-          title: 'Extraction complete',
+          title: 'Workflow extracted',
           detail: `"${MOCK_WORKFLOW_SPEC.title}" — ${MOCK_WORKFLOW_SPEC.steps.length} steps, ${(MOCK_WORKFLOW_SPEC.confidence * 100).toFixed(0)}% confidence`,
         });
         set({
@@ -109,7 +144,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
         return;
       }
       const progress = Math.round((step / (SCANNING_STEPS.length - 1)) * 100);
-      set({
+      set((s) => ({
         scanProgress: progress,
         scanStatus: SCANNING_STEPS[step],
         detailView: {
@@ -117,9 +152,10 @@ export const useRadarStore = create<RadarState>((set, get) => ({
           url: 'https://supabase.com/docs/guides/auth/quickstarts/nextjs',
           progress,
           status: SCANNING_STEPS[step],
+          tinyfish_events: s.tinyFishEvents,
         },
-      });
-    }, 800);
+      }));
+    }, 900);
   },
 
   demoShowSpec: () => {
@@ -133,9 +169,9 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     const state = get();
     state.pushEvent({
       type: 'similarity_found',
-      title: 'Similar skills found',
-      detail: 'firebase-auth-setup (81%) · nextjs-setup-helper (74%)',
-      skill_id: 'firebase-auth-setup',
+      title: 'Skill bank searched — no close match',
+      detail: 'website-drop (44%) · repo-launch (36%) — decision: CREATE',
+      skill_id: 'website-drop',
     });
     set({
       demoPhase: 3,
@@ -153,7 +189,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     state.pushEvent({
       type: 'compile_started',
       title: 'Compiling skill...',
-      detail: 'Forking from firebase-auth-setup',
+      detail: 'Creating new skill from workflow spec',
     });
     set({
       demoPhase: 4,
@@ -207,7 +243,6 @@ export const useRadarStore = create<RadarState>((set, get) => ({
       detailView: { kind: 'run_result', result: runResult },
     });
 
-    // Animate steps completing one by one
     MOCK_RUN_RESULT.steps.forEach((_, i) => {
       setTimeout(() => {
         set((s) => {
@@ -215,14 +250,13 @@ export const useRadarStore = create<RadarState>((set, get) => ({
           const result = { ...s.detailView.result };
           result.steps = result.steps.map((step, j) => ({
             ...step,
-            status: j < i ? 'done' as const : j === i ? 'running' as const : step.status,
+            status: j < i ? ('done' as const) : j === i ? ('running' as const) : step.status,
           }));
           return { detailView: { kind: 'run_result', result } };
         });
       }, (i + 1) * 600);
     });
 
-    // Mark all done
     setTimeout(() => {
       const s = get();
       s.pushEvent({
@@ -289,12 +323,15 @@ export const useRadarStore = create<RadarState>((set, get) => ({
   },
 
   demoReset: () => {
+    eventId = 0;
     set({
       skills: [...SEED_SKILLS],
       activity: [],
       detailView: { kind: 'none' },
       patchedToday: 0,
-      totalRuns: 87,
+      totalRuns: 193,
+      tinyFishEvents: [],
+      tinyFishActive: false,
       demoPhase: 0,
       scanProgress: 0,
       scanStatus: '',
@@ -306,7 +343,7 @@ export const useRadarStore = create<RadarState>((set, get) => ({
     const s = get();
 
     s.demoStartScan();
-    await wait(SCANNING_STEPS.length * 800 + 500);
+    await wait(SCANNING_STEPS.length * 900 + 500);
 
     s.demoFindSimilar();
     await wait(2000);

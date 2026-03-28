@@ -1,3 +1,12 @@
+export type SourceOrigin =
+  | 'hacker_news'
+  | 'github_trending'
+  | 'product_hunt'
+  | 'arxiv'
+  | 'dev_docs'
+  | 'reddit'
+  | 'manual';
+
 export interface SkillRecord {
   skill_id: string;
   name: string;
@@ -8,7 +17,9 @@ export interface SkillRecord {
   status: 'active' | 'draft' | 'deprecated';
   forked_from: string | null;
   composed_from: string[];
+  similar_to: string[]; // graph edges
   source_urls: string[];
+  source_origin: SourceOrigin;
   source_hashes: string[];
   surface_type: 'widget' | 'chat' | 'menu_bar' | 'mcp_tool';
   usage_count: number;
@@ -16,6 +27,16 @@ export interface SkillRecord {
   last_scanned_at: string | null;
   last_patched_at: string | null;
   eval_score: number | null;
+  // Rich metadata from extraction
+  api_endpoints?: string[];
+  context_snippets?: string[];
+  extraction_meta?: {
+    source_origin: SourceOrigin;
+    extracted_at: string;
+    tinyfish_run_id?: string;
+    page_count: number;
+    confidence: number;
+  };
 }
 
 export interface WorkflowSpec {
@@ -26,12 +47,14 @@ export interface WorkflowSpec {
   tags: string[];
   source_urls: string[];
   source_kind: string[];
+  source_origin: SourceOrigin;
   input_schema: { name: string; type: string; required: boolean; description: string }[];
   output_schema: Record<string, unknown>;
   steps: WorkflowStep[];
   evidence: Evidence[];
   surface_suggestion: string;
   confidence: number;
+  api_endpoints?: string[];
 }
 
 export interface WorkflowStep {
@@ -83,6 +106,25 @@ export interface RunResult {
   }[];
 }
 
+export type TinyFishEventType = 'STARTED' | 'STREAMING_URL' | 'PROGRESS' | 'HEARTBEAT' | 'COMPLETE';
+
+export interface TinyFishEvent {
+  type: TinyFishEventType;
+  timestamp: number;
+  message: string;
+  url?: string;         // streaming URL for observation
+  screenshot?: string;  // base64 or url
+}
+
+export interface ExecutionTarget {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  available: boolean;
+  launchUrl?: string;
+}
+
 export type ActivityEventType =
   | 'scan_started'
   | 'scan_complete'
@@ -95,6 +137,8 @@ export type ActivityEventType =
   | 'patch_detected'
   | 'patch_applied'
   | 'skill_created'
+  | 'tinyfish_progress'
+  | 'source_discovered'
   | 'info';
 
 export interface ActivityEvent {
@@ -109,8 +153,9 @@ export interface ActivityEvent {
 export type DetailView =
   | { kind: 'none' }
   | { kind: 'skill'; skill_id: string }
-  | { kind: 'scanning'; url: string; progress: number; status: string }
+  | { kind: 'scanning'; url: string; progress: number; status: string; tinyfish_events: TinyFishEvent[] }
   | { kind: 'workflow_spec'; spec: WorkflowSpec }
   | { kind: 'compiler'; spec: WorkflowSpec; decision: CompilerDecision | null; compiling: boolean }
   | { kind: 'run_result'; result: RunResult }
-  | { kind: 'patch'; patch: PatchJob };
+  | { kind: 'patch'; patch: PatchJob }
+  | { kind: 'execution'; skill_id: string };
