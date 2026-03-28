@@ -2,6 +2,7 @@ import { Header } from './components/Header';
 import { PipelineProgress } from './components/PipelineProgress';
 import { PromptBar } from './components/PromptBar';
 import { ResearchPanel } from './components/ResearchPanel';
+import { ArtifactGraph } from './components/ArtifactGraph';
 import { SceneSpecPanel } from './components/SceneSpecPanel';
 import { BlenderBridge } from './components/BlenderBridge';
 import { ActivityFeed } from './components/ActivityFeed';
@@ -23,6 +24,9 @@ function App() {
 
         {/* TinyFish research visualization */}
         {demoPhase >= 2 && <ResearchPanel />}
+
+        {/* Artifact bank — drag & drop graph */}
+        {demoPhase >= 3 && <ArtifactGraph />}
 
         {/* SceneSpec building up */}
         {demoPhase >= 4 && <SceneSpecPanel />}

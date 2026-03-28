@@ -105,6 +105,21 @@ export interface ActivityEvent {
   timestamp: number;
 }
 
+export type ArtifactCategory = 'architecture' | 'furniture' | 'props' | 'vehicles' | 'environment' | 'lighting';
+
+export interface Artifact {
+  id: string;
+  name: string;
+  category: ArtifactCategory;
+  icon: string;
+  color: string;
+  tags: string[];
+  relatedIds: string[];
+  // position in graph view (normalized 0-1)
+  gx: number;
+  gy: number;
+}
+
 export type DemoPhase = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export const PHASE_LABELS: Record<DemoPhase, string> = {

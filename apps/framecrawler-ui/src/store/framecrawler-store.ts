@@ -5,6 +5,7 @@ import type {
   SceneMetadata,
   ResearchSource,
   DemoPhase,
+  Artifact,
 } from './types';
 import {
   MOCK_SCENE_METADATA,
@@ -12,6 +13,7 @@ import {
   MOCK_TINYFISH_EVENTS,
   SCANNING_STEPS,
   DEMO_TOPIC,
+  ARTIFACT_BANK,
 } from './mock-data';
 
 let eventId = 0;
@@ -45,6 +47,10 @@ interface FrameCrawlerState {
   cameraAnimating: boolean;
   hoveredObjectId: string | null;
 
+  // Artifact bank
+  artifacts: Artifact[];
+  selectedArtifactIds: string[];
+
   // Blender connection
   blenderConnected: boolean;
   blenderLastPush: string | null;
@@ -60,6 +66,8 @@ interface FrameCrawlerState {
   pushEvent: (evt: Omit<ActivityEvent, 'id' | 'timestamp'>) => void;
   setHoveredObject: (id: string | null) => void;
   pushToBlender: () => Promise<void>;
+  addArtifact: (id: string) => void;
+  removeArtifact: (id: string) => void;
 
   // Demo sequence
   demoPrompt: () => void;
@@ -84,6 +92,8 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
   visibleLightIds: [],
   cameraAnimating: false,
   hoveredObjectId: null,
+  artifacts: ARTIFACT_BANK,
+  selectedArtifactIds: [],
   blenderConnected: false,
   blenderLastPush: null,
   demoPhase: 0,
@@ -98,6 +108,32 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
     })),
 
   setHoveredObject: (id) => set({ hoveredObjectId: id }),
+
+  addArtifact: (id) => {
+    const { selectedArtifactIds, artifacts } = get();
+    if (selectedArtifactIds.includes(id)) return;
+    const artifact = artifacts.find((a) => a.id === id);
+    if (!artifact) return;
+    set({ selectedArtifactIds: [...selectedArtifactIds, id] });
+    get().pushEvent({
+      type: 'object_placed',
+      title: `Added: ${artifact.name}`,
+      detail: `${artifact.category} artifact added to scene`,
+    });
+  },
+
+  removeArtifact: (id) => {
+    const { selectedArtifactIds, artifacts } = get();
+    const artifact = artifacts.find((a) => a.id === id);
+    set({ selectedArtifactIds: selectedArtifactIds.filter((x) => x !== id) });
+    if (artifact) {
+      get().pushEvent({
+        type: 'info',
+        title: `Removed: ${artifact.name}`,
+        detail: 'Artifact removed from scene',
+      });
+    }
+  },
 
   pushToBlender: async () => {
     const spec = get().sceneMetadata;
@@ -328,6 +364,7 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
       visibleLightIds: [],
       cameraAnimating: false,
       hoveredObjectId: null,
+      selectedArtifactIds: [],
       blenderConnected: false,
       blenderLastPush: null,
       demoPhase: 0,

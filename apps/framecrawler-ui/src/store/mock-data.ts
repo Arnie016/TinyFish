@@ -1,4 +1,4 @@
-import type { SceneMetadata, ResearchSource, TinyFishEvent } from './types';
+import type { SceneMetadata, ResearchSource, TinyFishEvent, Artifact } from './types';
 
 export const DEMO_TOPIC = 'cyberpunk alleyway at night';
 
@@ -405,6 +405,58 @@ export const MOCK_SCENE_METADATA: SceneMetadata = {
     { url: 'https://cinematography.com/index.php/blade-runner-lighting', snippet: 'Practical neon provides motivated in-scene lighting' },
     { url: 'https://www.turbosquid.com/cyberpunk-city-assets', snippet: 'Modular sections, 4-6m alley width, standard prop set' },
   ],
+};
+
+// Artifact bank — items discovered by TinyFish that the user can drag into the scene
+export const ARTIFACT_BANK: Artifact[] = [
+  // Architecture
+  { id: 'a-wall-concrete', name: 'Concrete Wall', category: 'architecture', icon: '\u2588', color: '#4a4a5a', tags: ['structure', 'urban'], relatedIds: ['a-wall-metal', 'a-fire-escape'], gx: 0.12, gy: 0.1 },
+  { id: 'a-wall-metal', name: 'Metal Cladding', category: 'architecture', icon: '\u2588', color: '#5a6a7a', tags: ['structure', 'industrial'], relatedIds: ['a-wall-concrete', 'a-ac-unit'], gx: 0.3, gy: 0.08 },
+  { id: 'a-fire-escape', name: 'Fire Escape', category: 'architecture', icon: '\u2596', color: '#6a6a7a', tags: ['structure', 'metal'], relatedIds: ['a-wall-concrete', 'a-cables'], gx: 0.08, gy: 0.28 },
+  { id: 'a-door-metal', name: 'Metal Door', category: 'architecture', icon: '\u25A3', color: '#3a3a4a', tags: ['structure', 'entry'], relatedIds: ['a-wall-concrete'], gx: 0.22, gy: 0.25 },
+  { id: 'a-window', name: 'Barred Window', category: 'architecture', icon: '\u25A4', color: '#2a3a4a', tags: ['structure', 'glass'], relatedIds: ['a-wall-concrete', 'a-ac-unit'], gx: 0.38, gy: 0.22 },
+  { id: 'a-cables', name: 'Cable Bundle', category: 'architecture', icon: '\u2261', color: '#2a2a3a', tags: ['overhead', 'wires'], relatedIds: ['a-fire-escape', 'a-wall-metal'], gx: 0.18, gy: 0.42 },
+
+  // Furniture / setpieces
+  { id: 'f-dumpster', name: 'Dumpster', category: 'furniture', icon: '\u25A1', color: '#2d4a22', tags: ['container', 'trash'], relatedIds: ['f-trash-bags', 'f-barrel'], gx: 0.55, gy: 0.12 },
+  { id: 'f-barrel', name: 'Oil Barrel', category: 'furniture', icon: '\u25CB', color: '#4a3a2a', tags: ['container', 'industrial'], relatedIds: ['f-dumpster', 'f-crate'], gx: 0.7, gy: 0.1 },
+  { id: 'f-crate', name: 'Wooden Crate', category: 'furniture', icon: '\u25A0', color: '#5a4a3a', tags: ['container', 'storage'], relatedIds: ['f-barrel', 'f-dumpster'], gx: 0.82, gy: 0.15 },
+  { id: 'f-trash-bags', name: 'Trash Bags', category: 'furniture', icon: '\u25CF', color: '#1a1a1a', tags: ['debris', 'ground'], relatedIds: ['f-dumpster'], gx: 0.6, gy: 0.28 },
+  { id: 'f-bench', name: 'Metal Bench', category: 'furniture', icon: '\u2550', color: '#5a5a6a', tags: ['seating', 'street'], relatedIds: ['f-crate'], gx: 0.78, gy: 0.3 },
+
+  // Props
+  { id: 'p-neon-sign', name: 'Neon Sign', category: 'props', icon: '\u2606', color: '#ff006a', tags: ['light', 'signage', 'emissive'], relatedIds: ['p-neon-kanji', 'l-neon-tube'], gx: 0.15, gy: 0.58 },
+  { id: 'p-neon-kanji', name: 'Kanji Sign', category: 'props', icon: '\u5149', color: '#00ffaa', tags: ['light', 'signage', 'emissive'], relatedIds: ['p-neon-sign', 'l-neon-tube'], gx: 0.32, gy: 0.55 },
+  { id: 'p-steam-vent', name: 'Steam Vent', category: 'props', icon: '\u2248', color: '#8a8a9a', tags: ['fx', 'atmosphere'], relatedIds: ['p-ac-unit', 'p-manhole'], gx: 0.48, gy: 0.52 },
+  { id: 'p-ac-unit', name: 'AC Unit', category: 'props', icon: '\u25A8', color: '#5a5a6a', tags: ['mechanical', 'wall-mount'], relatedIds: ['a-ac-unit', 'p-steam-vent'], gx: 0.42, gy: 0.38 },
+  { id: 'p-manhole', name: 'Manhole Cover', category: 'props', icon: '\u25CE', color: '#3a3a4a', tags: ['ground', 'metal'], relatedIds: ['p-steam-vent', 'p-puddle'], gx: 0.58, gy: 0.48 },
+  { id: 'p-puddle', name: 'Puddle', category: 'props', icon: '\u223F', color: '#1a1a3a', tags: ['water', 'reflection'], relatedIds: ['p-manhole'], gx: 0.65, gy: 0.58 },
+  { id: 'p-poster', name: 'Torn Poster', category: 'props', icon: '\u25AD', color: '#6a4a3a', tags: ['wall', 'paper'], relatedIds: ['p-neon-sign'], gx: 0.25, gy: 0.72 },
+
+  // Vehicles
+  { id: 'v-motorcycle', name: 'Motorcycle', category: 'vehicles', icon: '\u25B7', color: '#2a2a2a', tags: ['vehicle', 'parked'], relatedIds: ['v-drone', 'f-barrel'], gx: 0.82, gy: 0.48 },
+  { id: 'v-drone', name: 'Hover Drone', category: 'vehicles', icon: '\u25C7', color: '#3a3a5a', tags: ['flying', 'surveillance'], relatedIds: ['v-motorcycle', 'l-spot-red'], gx: 0.9, gy: 0.38 },
+
+  // Environment
+  { id: 'e-fog', name: 'Volumetric Fog', category: 'environment', icon: '\u2601', color: '#4a4a6a', tags: ['atmosphere', 'volume'], relatedIds: ['e-rain', 'p-steam-vent'], gx: 0.72, gy: 0.68 },
+  { id: 'e-rain', name: 'Rain Particles', category: 'environment', icon: '\u2602', color: '#4a5a7a', tags: ['weather', 'particles'], relatedIds: ['e-fog', 'p-puddle'], gx: 0.85, gy: 0.62 },
+  { id: 'e-sky', name: 'Night Sky', category: 'environment', icon: '\u263D', color: '#0a0a2a', tags: ['background', 'dark'], relatedIds: ['e-fog'], gx: 0.92, gy: 0.72 },
+
+  // Lighting
+  { id: 'l-neon-tube', name: 'Neon Tube', category: 'lighting', icon: '\u2501', color: '#ff006a', tags: ['emissive', 'practical'], relatedIds: ['p-neon-sign', 'p-neon-kanji'], gx: 0.1, gy: 0.85 },
+  { id: 'l-spot-overhead', name: 'Overhead Spot', category: 'lighting', icon: '\u25BD', color: '#ffaa44', tags: ['key', 'directional'], relatedIds: ['l-spot-rim', 'l-neon-tube'], gx: 0.3, gy: 0.88 },
+  { id: 'l-spot-rim', name: 'Rim Light', category: 'lighting', icon: '\u25B3', color: '#00ffaa', tags: ['rim', 'backlight'], relatedIds: ['l-spot-overhead'], gx: 0.5, gy: 0.85 },
+  { id: 'l-spot-red', name: 'Red Indicator', category: 'lighting', icon: '\u25CF', color: '#ff2222', tags: ['practical', 'warning'], relatedIds: ['v-drone', 'l-neon-tube'], gx: 0.68, gy: 0.82 },
+  { id: 'l-ambient', name: 'Blue Ambient', category: 'lighting', icon: '\u25CB', color: '#4466ff', tags: ['fill', 'ambient'], relatedIds: ['l-spot-overhead', 'l-spot-rim'], gx: 0.42, gy: 0.95 },
+];
+
+export const ARTIFACT_CATEGORY_COLORS: Record<string, string> = {
+  architecture: '#7C3AED',
+  furniture: '#06B6D4',
+  props: '#EC4899',
+  vehicles: '#F59E0B',
+  environment: '#10B981',
+  lighting: '#FF6B6B',
 };
 
 export const SCANNING_STEPS = [
