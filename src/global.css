@@ -1,0 +1,59 @@
+:root {
+  color-scheme: light;
+  --radar-bg: #f5f0e4;
+  --radar-panel: rgba(255, 252, 244, 0.66);
+  --radar-ink: #182436;
+  --radar-muted: #546173;
+  --radar-border: rgba(24, 36, 54, 0.12);
+  --radar-accent: #ff6b3b;
+  --radar-accent-soft: rgba(255, 107, 59, 0.14);
+  --radar-success: #1f8f6a;
+  --radar-grid: rgba(24, 36, 54, 0.08);
+  --radar-shadow: 0 30px 80px rgba(24, 36, 54, 0.08);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(255, 107, 59, 0.18), transparent 28%),
+    radial-gradient(circle at 78% 12%, rgba(31, 143, 106, 0.14), transparent 24%),
+    linear-gradient(180deg, #f8f3e6 0%, #edf2ec 100%);
+  color: var(--radar-ink);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--radar-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--radar-grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 92%);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}

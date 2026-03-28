@@ -1,0 +1,433 @@
+#app {
+  min-height: 100vh;
+  padding: 28px;
+}
+
+.shell {
+  position: relative;
+  overflow: hidden;
+  max-width: 1280px;
+  margin: 0 auto;
+  border: 1px solid var(--radar-border);
+  background: rgba(255, 251, 243, 0.76);
+  box-shadow: var(--radar-shadow);
+  backdrop-filter: blur(20px);
+}
+
+.shell::before {
+  content: "";
+  position: absolute;
+  top: -28%;
+  right: -10%;
+  width: 420px;
+  height: 420px;
+  border-radius: 999px;
+  border: 1px solid rgba(24, 36, 54, 0.08);
+  background:
+    conic-gradient(from 0deg, rgba(255, 107, 59, 0.4), transparent 28%, transparent 62%, rgba(255, 107, 59, 0.18) 100%),
+    radial-gradient(circle, rgba(255, 107, 59, 0.08), transparent 65%);
+  animation: sweep 12s linear infinite;
+  pointer-events: none;
+}
+
+.shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-left: 1px solid var(--radar-border);
+  border-right: 1px solid var(--radar-border);
+  width: min(70%, 760px);
+  margin: 0 auto;
+  pointer-events: none;
+}
+
+.masthead,
+.footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--radar-border);
+}
+
+.footer {
+  border-top: 1px solid var(--radar-border);
+  border-bottom: 0;
+  flex-wrap: wrap;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--radar-muted);
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--radar-accent);
+  box-shadow: 0 0 0 8px rgba(255, 107, 59, 0.12);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--radar-border);
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--radar-muted);
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(260px, 0.9fr);
+}
+
+.main-pane,
+.side-pane {
+  min-width: 0;
+}
+
+.main-pane {
+  border-right: 1px solid var(--radar-border);
+}
+
+.hero,
+.section,
+.list-row,
+.pipeline-row,
+.watch-row,
+.skill-meta-row,
+.rationale-row,
+.source-row,
+.eval-row {
+  padding: 22px;
+}
+
+.hero {
+  display: grid;
+  gap: 18px;
+  padding-top: 28px;
+  padding-bottom: 30px;
+}
+
+.hero-copy {
+  max-width: 700px;
+}
+
+.hero-copy > * {
+  opacity: 0;
+  animation: rise 0.7s ease forwards;
+}
+
+.hero-copy > :nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.hero-copy > :nth-child(3) {
+  animation-delay: 0.16s;
+}
+
+.hero-title {
+  margin: 8px 0 0;
+  font-family: "Iowan Old Style", Georgia, serif;
+  font-size: clamp(2.8rem, 5vw, 5.2rem);
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+.hero-subtitle {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--radar-muted);
+  font-size: 1rem;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--radar-border);
+  border-bottom: 1px solid var(--radar-border);
+}
+
+.metric {
+  padding: 18px 22px;
+  border-right: 1px solid var(--radar-border);
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+
+.metric-value {
+  font-size: clamp(2rem, 3vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.06em;
+}
+
+.metric-label {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--radar-muted);
+}
+
+.metric-detail {
+  margin-top: 10px;
+  color: var(--radar-muted);
+  font-size: 0.92rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: -0.03em;
+}
+
+.section-note {
+  margin: 0;
+  color: var(--radar-muted);
+  font-size: 0.94rem;
+}
+
+.list {
+  border-top: 1px solid var(--radar-border);
+}
+
+.list-row,
+.pipeline-row,
+.watch-row,
+.skill-meta-row,
+.rationale-row,
+.source-row,
+.eval-row {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--radar-border);
+}
+
+.list-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.row-title {
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.row-meta,
+.pill-note,
+.row-link {
+  color: var(--radar-muted);
+  font-size: 0.92rem;
+}
+
+.row-score {
+  min-width: 96px;
+  text-align: right;
+  font-weight: 700;
+}
+
+.tag-rail,
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tag,
+.action,
+.mini-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--radar-border);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--radar-ink);
+}
+
+.tag {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.action,
+.mini-action {
+  padding: 12px 14px;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.mini-action {
+  font-size: 0.88rem;
+  padding: 9px 12px;
+}
+
+.action:hover,
+.mini-action:hover,
+.list-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(24, 36, 54, 0.22);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.action.is-primary {
+  background: var(--radar-accent);
+  color: white;
+  border-color: transparent;
+}
+
+.pipeline {
+  display: grid;
+  gap: 0;
+}
+
+.pipeline-row,
+.watch-row,
+.skill-meta-row,
+.rationale-row,
+.source-row,
+.eval-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pipeline-label,
+.watch-title {
+  font-size: 0.9rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--radar-muted);
+}
+
+.watch-state {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px 8px;
+  background: var(--radar-accent-soft);
+  color: var(--radar-accent);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.run-headline {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.run-verdict {
+  font-family: "Iowan Old Style", Georgia, serif;
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.note-block {
+  padding: 18px 22px;
+  border-top: 1px solid var(--radar-border);
+  color: var(--radar-muted);
+}
+
+.empty {
+  color: var(--radar-muted);
+  padding: 28px 22px;
+}
+
+@media (max-width: 1024px) {
+  #app {
+    padding: 18px;
+  }
+
+  .content {
+    grid-template-columns: 1fr;
+  }
+
+  .main-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--radar-border);
+  }
+
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  #app {
+    padding: 0;
+  }
+
+  .shell {
+    border-left: 0;
+    border-right: 0;
+  }
+
+  .masthead,
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metric-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .list-row {
+    grid-template-columns: 1fr;
+  }
+
+  .row-score {
+    text-align: left;
+  }
+
+  .hero-title {
+    font-size: clamp(2.4rem, 13vw, 3.2rem);
+  }
+}
+
+@keyframes sweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
