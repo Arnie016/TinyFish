@@ -45,14 +45,14 @@ const RESEARCH_GOALS = [
   {
     id: 'tf-visual',
     label: 'Visual References',
-    goal: 'Find cyberpunk alleyway concept art and reference images. Extract: environment details, major props, materials, color palettes. List each item with a brief description.',
-    url: 'https://www.artstation.com/search?sort_by=relevance&query=cyberpunk%20alley%20night',
+    goal: 'Find neon night market concept art and reference images. Extract: stall layouts, vendor props, signal equipment, materials, color palettes. List each item with a brief description.',
+    url: 'https://www.artstation.com/search?sort_by=relevance&query=neon%20night%20market%20lost%20signals',
   },
   {
     id: 'tf-lighting',
     label: 'Lighting & Camera',
-    goal: 'Find neon lighting techniques and camera angles for cyberpunk night scenes. Extract: key/fill/rim light descriptions, practical light sources, camera shot types.',
-    url: 'https://www.blenderguru.com/tutorials/lighting-neon-scenes',
+    goal: 'Find market string-light and neon techniques for nocturnal bazaar scenes. Extract: key/fill/rim light descriptions, practical light sources, camera shot types.',
+    url: 'https://www.blenderguru.com/tutorials/emissive-market-lighting',
   },
 ];
 

@@ -25,7 +25,7 @@ export function ViewportPanel() {
         <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none">
           <div className="glass rounded-lg px-3 py-2 space-y-1">
             <div className="text-[10px] text-text-muted uppercase tracking-wider">Preview</div>
-            <div className="text-xs font-medium text-text-primary">Cyberpunk Alleyway</div>
+            <div className="text-xs font-medium text-text-primary">Neon Market of Lost Signals</div>
             {demoPhase >= 5 && (
               <div className="flex items-center gap-3 text-[10px] font-mono text-text-secondary">
                 <span>{visibleObjectIds.length} objects</span>
