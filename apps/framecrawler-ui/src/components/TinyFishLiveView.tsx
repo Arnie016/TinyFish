@@ -27,7 +27,7 @@ function BrowserScreen({ session }: { session: TinyFishSession }) {
         </div>
         <div className="flex-1 min-w-0 mx-1">
           <div className="bg-bg rounded px-1.5 py-0.5 text-[7px] text-text-muted font-mono truncate">
-            {session.streamingUrl ? 'observe.tinyfish.ai' : 'connecting...'}
+            {session.streamingUrl ? 'observe.tinyfish.ai' : session.status === 'pending' ? 'queued...' : 'connecting...'}
           </div>
         </div>
         {isActive && (
@@ -39,7 +39,7 @@ function BrowserScreen({ session }: { session: TinyFishSession }) {
         )}
       </div>
 
-      {/* Live browser iframe or placeholder */}
+      {/* Live browser iframe or event log */}
       <div className="relative h-32 bg-bg overflow-hidden">
         {session.streamingUrl ? (
           <iframe
@@ -48,6 +48,25 @@ function BrowserScreen({ session }: { session: TinyFishSession }) {
             sandbox="allow-scripts allow-same-origin"
             title={`TinyFish: ${session.label}`}
           />
+        ) : session.events.length > 0 ? (
+          <div className="p-1.5 space-y-0.5 overflow-y-auto h-full">
+            {isActive && (
+              <motion.div
+                className="absolute top-0 inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-cyan to-transparent z-10"
+                animate={{ y: [0, 128, 0] }}
+                transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
+              />
+            )}
+            {session.events.slice(-8).map((evt, i) => {
+              const cfg = EVENT_ICONS[evt.type] || EVENT_ICONS.PROGRESS;
+              return (
+                <div key={i} className="flex items-center gap-1 text-[7px]">
+                  <span style={{ color: cfg.color }}>{cfg.icon}</span>
+                  <span className="text-text-muted font-mono truncate">{evt.message}</span>
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <>
             {isActive && (

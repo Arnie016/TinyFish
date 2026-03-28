@@ -10,6 +10,7 @@ import { ValidationPanel } from './components/ValidationPanel';
 import { PerformanceBar } from './components/PerformanceBar';
 import { BlenderBridge } from './components/BlenderBridge';
 import { ActivityFeed } from './components/ActivityFeed';
+import { AssetGallery } from './components/AssetGallery';
 import { useKeyboardDemo } from './hooks/use-keyboard-demo';
 import { useFrameCrawlerStore } from './store/framecrawler-store';
 
@@ -49,6 +50,9 @@ function App() {
 
         {/* Performance budget bars */}
         {demoPhase >= 4 && sceneMetadata && <PerformanceBar />}
+
+        {/* Asset gallery — visual presentation of all scraped scene objects */}
+        {demoPhase >= 5 && sceneMetadata && <AssetGallery />}
 
         {/* Blender connection + push */}
         {demoPhase >= 4 && <BlenderBridge />}

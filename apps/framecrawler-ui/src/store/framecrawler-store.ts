@@ -26,6 +26,13 @@ import {
 let eventId = 0;
 const nextId = () => `evt-${++eventId}`;
 
+// Track active SSE connections so we can abort them on reset
+const activeControllers: AbortController[] = [];
+function cancelAllSessions() {
+  for (const c of activeControllers) c.abort();
+  activeControllers.length = 0;
+}
+
 function findTip(phase: number, dismissed: string[]): ContextualTip | null {
   return MOCK_CONTEXTUAL_TIPS.find((t) => t.phase === phase && !dismissed.includes(t.id)) ?? null;
 }
@@ -55,7 +62,10 @@ function startTinyFishSession(
   onComplete: (sessionId: string) => void,
 ): AbortController {
   const controller = new AbortController();
+  let runId: string | null = null;
+  let done = false;
 
+  // 1. Start the run via SSE (this actually triggers the browser)
   fetch('/api/tinyfish/run-sse', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -65,6 +75,7 @@ function startTinyFishSession(
     if (!res.ok || !res.body) {
       onEvent(session.id, { type: 'ERROR', timestamp: Date.now(), message: `API error: ${res.status}` });
       onComplete(session.id);
+      done = true;
       return;
     }
 
@@ -73,52 +84,80 @@ function startTinyFishSession(
     let buffer = '';
 
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      let currentEventType = '';
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed) continue;
-        if (trimmed.startsWith('event:')) {
-          currentEventType = trimmed.slice(6).trim();
-        } else if (trimmed.startsWith('data:')) {
-          const dataStr = trimmed.slice(5).trim();
-          if (!dataStr) continue;
-          try {
-            const data = JSON.parse(dataStr);
-            // TinyFish sends type inside data object
-            const eventType = currentEventType || data.type || 'PROGRESS';
-            const tfEvent: TinyFishEvent = {
-              type: eventType as TinyFishEvent['type'],
-              timestamp: Date.now(),
-              message: data.message || data.status || data.step || JSON.stringify(data).slice(0, 120),
-              url: data.url || data.streaming_url || data.observe_url || undefined,
-            };
-            onEvent(session.id, tfEvent);
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const dataStr = trimmed.slice(5).trim();
+        if (!dataStr) continue;
+        try {
+          const data = JSON.parse(dataStr);
+          const eventType = data.type || 'PROGRESS';
 
-            if (eventType === 'COMPLETE' || eventType === 'ERROR' || data.status === 'completed') {
-              onComplete(session.id);
-              return;
-            }
-          } catch {
-            onEvent(session.id, { type: 'PROGRESS', timestamp: Date.now(), message: dataStr.slice(0, 120) });
+          // Capture run_id from STARTED event
+          if (eventType === 'STARTED' && data.run_id) {
+            runId = data.run_id;
+            onEvent(session.id, { type: 'STARTED', timestamp: Date.now(), message: 'Browser launching...' });
+          } else if (eventType === 'COMPLETE' || data.status === 'completed') {
+            onEvent(session.id, {
+              type: 'COMPLETE', timestamp: Date.now(),
+              message: data.message || 'Research complete',
+            });
+            done = true;
+            onComplete(session.id);
+            return;
+          } else if (eventType === 'PROGRESS') {
+            onEvent(session.id, {
+              type: 'PROGRESS', timestamp: Date.now(),
+              message: data.message || data.step || 'Working...',
+            });
           }
-          currentEventType = '';
-        }
+          // Skip heartbeats — the poll loop handles live updates
+        } catch { /* skip unparseable */ }
       }
     }
-    onComplete(session.id);
+    if (!done) { done = true; onComplete(session.id); }
   }).catch((err) => {
-    if (err.name !== 'AbortError') {
+    if (err.name !== 'AbortError' && !done) {
       onEvent(session.id, { type: 'ERROR', timestamp: Date.now(), message: String(err) });
+      done = true;
       onComplete(session.id);
     }
   });
+
+  // 2. Poll the runs API to get streaming_url (the live browser iframe)
+  const pollForStreamUrl = async () => {
+    // Wait a moment for the STARTED event to give us the run_id
+    await new Promise((r) => setTimeout(r, 2000));
+
+    while (!done && !controller.signal.aborted) {
+      if (runId) {
+        try {
+          const pollRes = await fetch(`/api/tinyfish/runs/${runId}`, { signal: controller.signal });
+          if (pollRes.ok) {
+            const poll = await pollRes.json();
+            if (poll.streaming_url) {
+              onEvent(session.id, {
+                type: 'STREAMING_URL',
+                timestamp: Date.now(),
+                message: 'Live browser connected',
+                url: poll.streaming_url,
+              });
+              return; // Got the URL, stop polling
+            }
+          }
+        } catch { /* ignore poll errors */ }
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  };
+  pollForStreamUrl();
 
   return controller;
 }
@@ -329,11 +368,14 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
 
     let completedCount = 0;
 
+    // Cancel any previous sessions first
+    cancelAllSessions();
+
     // Launch each session in parallel with real TinyFish API
     for (const goal of RESEARCH_GOALS) {
       const session = { ...sessions.find((s) => s.id === goal.id)!, goal: goal.goal, url: goal.url };
 
-      startTinyFishSession(
+      const controller = startTinyFishSession(
         session,
         // onEvent
         (sessionId, event) => {
@@ -341,7 +383,8 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
             const updated = s.tinyFishSessions.map((sess) => {
               if (sess.id !== sessionId) return sess;
               const newEvents = [...sess.events, event];
-              const streamingUrl = event.type === 'STREAMING_URL' && event.url ? event.url : sess.streamingUrl;
+              // Only set streaming URL from explicit TinyFish streaming_url events
+              const streamingUrl = (event.type === 'STREAMING_URL' || event.type === 'STARTED') && event.url ? event.url : sess.streamingUrl;
               const progress = Math.min(sess.progress + 5, 95);
               return { ...sess, events: newEvents, streamingUrl, progress };
             });
@@ -353,11 +396,11 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
           });
 
           // Log key events to activity feed
-          if (event.type === 'STREAMING_URL') {
+          if (event.type === 'STARTED') {
             get().pushEvent({
               type: 'tinyfish_progress',
-              title: `${goal.label}: browser live`,
-              detail: event.url || 'Session started',
+              title: `${goal.label}: submitted`,
+              detail: event.url ? 'Live preview available' : 'Queued',
             });
           } else if (event.type === 'PROGRESS') {
             get().pushEvent({
@@ -392,6 +435,7 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
           }
         },
       );
+      activeControllers.push(controller);
     }
 
     // Progress animation fallback (updates scan status steps while waiting)
@@ -554,8 +598,9 @@ export const useFrameCrawlerStore = create<FrameCrawlerState>((set, get) => ({
     }));
   },
 
-  // Reset
+  // Reset — cancel active SSE connections
   demoReset: () => {
+    cancelAllSessions();
     eventId = 0;
     set({
       sceneMetadata: null,

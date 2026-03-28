@@ -111,6 +111,72 @@ export default defineConfig(({ mode }) => {
               }
             })
           })
+
+          // POST /api/tinyfish/run-async — fire and forget, returns run_id
+          server.middlewares.use('/api/tinyfish/run-async', (req, res) => {
+            if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return }
+            if (!TINYFISH_API_KEY) { res.writeHead(500); res.end(JSON.stringify({ error: 'No API key' })); return }
+
+            let body = ''
+            req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+            req.on('end', async () => {
+              try {
+                const payload = JSON.parse(body)
+                const tfRes = await fetch('https://agent.tinyfish.ai/v1/automation/run-async', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-API-Key': TINYFISH_API_KEY },
+                  body: JSON.stringify({ goal: payload.goal, url: payload.url || undefined }),
+                })
+                const data = await tfRes.json()
+                res.writeHead(tfRes.status, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify(data))
+              } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(e) }))
+              }
+            })
+          })
+
+          // GET /api/tinyfish/runs/* — poll run status
+          // POST /api/tinyfish/runs/*/cancel — cancel a run
+          server.middlewares.use('/api/tinyfish/runs/', (req, res) => {
+            if (!TINYFISH_API_KEY) { res.writeHead(500); res.end(JSON.stringify({ error: 'No API key' })); return }
+
+            const urlPath = req.url?.replace(/^\//, '') || ''
+            const cancelMatch = urlPath.match(/^(.+)\/cancel$/)
+
+            if (cancelMatch && req.method === 'POST') {
+              const runId = cancelMatch[1]
+              fetch(`https://agent.tinyfish.ai/v1/runs/${runId}/cancel`, {
+                method: 'POST',
+                headers: { 'X-API-Key': TINYFISH_API_KEY },
+              }).then(async (tfRes) => {
+                const data = await tfRes.json()
+                res.writeHead(tfRes.status, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify(data))
+              }).catch((e) => {
+                res.writeHead(500, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(e) }))
+              })
+              return
+            }
+
+            if (req.method !== 'GET') { res.writeHead(405); res.end('Method not allowed'); return }
+
+            const runId = urlPath
+            if (!runId) { res.writeHead(400); res.end(JSON.stringify({ error: 'Missing run_id' })); return }
+
+            fetch(`https://agent.tinyfish.ai/v1/runs/${runId}`, {
+              headers: { 'X-API-Key': TINYFISH_API_KEY },
+            }).then(async (tfRes) => {
+              const data = await tfRes.json()
+              res.writeHead(tfRes.status, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify(data))
+            }).catch((e) => {
+              res.writeHead(500, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ error: String(e) }))
+            })
+          })
         },
       },
     ],
